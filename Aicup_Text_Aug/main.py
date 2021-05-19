@@ -1,3 +1,4 @@
+# -*- coding: UTF-8 -*-
 '''
 Chinese text augmentation
 file format: for aicup data processing
@@ -34,10 +35,14 @@ importlib.reload(functions)
 
 
 output = None
+
 if args.output:
     output = args.output
 else:
-    output = f'./augmented_{args.input}'
+    if args.input.endswith('.csv'):
+        output = './out.csv'
+    elif args.input.endswith('.json'):
+        output = './out.json'
 myseed = args.seed
 functions.seed_in(myseed)
 
@@ -103,33 +108,33 @@ def gen_eda(train_orig, output_file, alpha_sr, alpha_ri, alpha_rs, alpha_rd, num
         article_ids = df['article_id'].tolist()
         texts = df['text'].tolist()
         labels = df['label'].tolist()
-        print(f'\nThe original data size is {len(df)}')
+        print(f'The original data size is {len(df)}')
         out_data = {'article_id':[], 'text': [], 'label': []}
         for i, par in tqdm(enumerate(texts), total = len(texts)): # all paragraphs
-          aug_sents_per_par = []
-          seged_par= ParagraphSeg(par)
-          seged_par = [t for t in seged_par if len(t) > 0] 
-          for j, sent in enumerate(seged_par):
-            aug_sents = eda(sent, alpha_sr=alpha_sr, alpha_ri=alpha_ri, alpha_rs=alpha_rs, p_rd=alpha_rd, num_aug = num_aug)
-            # a list of augmented sentence based on the current sentence
-            # print('aug_sents ', aug_sents)
-            aug_sents_per_par.append(aug_sents) 
-            AUG_LEN = len(aug_sents)
+            aug_sents_per_par = []
+            seged_par= ParagraphSeg(par)
+            seged_par = [t for t in seged_par if len(t) > 0] 
+            for j, sent in enumerate(seged_par):
+                aug_sents = eda(sent, alpha_sr=alpha_sr, alpha_ri=alpha_ri, alpha_rs=alpha_rs, p_rd=alpha_rd, num_aug = num_aug)
+                # a list of augmented sentence based on the current sentence
+                # print('aug_sents ', aug_sents)
+                aug_sents_per_par.append(aug_sents) 
+                AUG_LEN = len(aug_sents)
           
           # here we should have a aug_sents_per_par with each sentence multiplicated to {num_aug+1} number
-          aug_pars = [''] * AUG_LEN
-          for sidx in range(len(aug_sents_per_par)):
-              cnt = 0
-              while len(aug_sents_per_par[sidx]) > 0:
-                choice = aug_sents_per_par[sidx].pop()
-                aug_pars[cnt]+=choice
-                cnt += 1
+            aug_pars = [''] * AUG_LEN
+            for sidx in range(len(aug_sents_per_par)):
+                cnt = 0
+                while len(aug_sents_per_par[sidx]) > 0:
+                    choice = aug_sents_per_par[sidx].pop()
+                    aug_pars[cnt]+=choice
+                    cnt += 1
               # after the while loop, the aug_pars should have one aug_sent into each aug_pars[i] 
-          # aug_pars should contain augmented paragraphs for the current paragraph 
-          for aug_par in aug_pars:
-            out_data['article_id'].append(article_ids[i])
-            out_data['text'].append(aug_par)
-            out_data['label'].append(labels[i])     
+            # aug_pars should contain augmented paragraphs for the current paragraph 
+            for aug_par in aug_pars:
+                out_data['article_id'].append(article_ids[i])
+                out_data['text'].append(aug_par)
+                out_data['label'].append(labels[i])     
         new_df = pd.DataFrame(out_data, columns=['article_id','text', 'label'])
         print(f'The augmented data size is {len(new_df)}')
         new_df.to_csv(output_file, index = False)

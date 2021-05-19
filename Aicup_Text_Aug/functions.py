@@ -3,7 +3,11 @@ import random
 from random import shuffle
 import re
 from copy import deepcopy 
-sys.path.append('./CwnGraph')
+sys.path.append('/CwnGraph')
+######### Synonym Replacement ##########
+# !git clone https://github.com/lopentu/CwnGraph
+# !gdown --id '1opGRw490cAizoj2JHzR8UIZME3Mc65Ze' --output cwn_graph.pyobj
+# !unzip -o cwn_graph.pyobj
 from CwnGraph import CwnBase
 
 def seed_in(s):
@@ -26,10 +30,6 @@ def RemoveDummies(string):
     if len(new_string) == 0: new_string.append('')
     return new_string 
 
-######### Synonym Replacement ##########
-# !git clone https://github.com/lopentu/CwnGraph
-# !gdown --id '1opGRw490cAizoj2JHzR8UIZME3Mc65Ze' --output cwn_graph.pyobj
-# !unzip -o cwn_graph.pyobj
 CwnBase.install_cwn("./cwn_graph.pyobj")
 cwn = CwnBase()
 def SynReplacement(words, n, verbose = False):
