@@ -98,7 +98,7 @@ def gen_eda(train_orig, output_file, alpha_sr, alpha_ri, alpha_rs, alpha_rd, num
         input_file = os.path.abspath(str(train_orig))
         df = pd.read_csv(input_file)
         ###########
-        df = df[:20]
+        # df = df[:20]
         ############
         article_ids = df['article_id'].tolist()
         texts = df['text'].tolist()
