@@ -10,3 +10,5 @@ data/
 *.lock
 *.json
 .DS_Store
+*.zip
+Aicup_Text_Aug/CwnGraph/
