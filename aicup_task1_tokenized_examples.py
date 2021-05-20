@@ -183,7 +183,7 @@ def main(args):
             outputs = model(**batch)
             y_pred = softmax(outputs.logits).cpu().data.numpy()
             y = batch.labels.cpu().data.numpy()
-            for i,example_id in enumerate(example_ids):
+            for i, example_id in enumerate(example_ids):
                 y_preds[example_id][0] += y_pred[i][0]
                 y_preds[example_id][1] += y_pred[i][1]
                 y_trues[example_id] = y[i]
@@ -217,6 +217,7 @@ def main(args):
                     y_trues[example_id] = y[i]
                 loss = outputs.loss
                 eval_loss += loss.item()
+        # sum logP
         eval_acc = (np.sum(np.argmax(y_preds, axis=1) == y_trues) - num_train_samples)/num_eval_samples
         eval_loss /= num_eval_batch
 
