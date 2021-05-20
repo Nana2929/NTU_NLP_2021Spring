@@ -13,16 +13,22 @@ import os
 import json
 import unicodedata
 import copy
-from ckiptagger import data_utils, construct_dictionary, WS, POS, NER
+from ckiptagger import construct_dictionary, WS
 import jsonlines
 from tqdm import tqdm
 import tensorflow as tf
+import subprocess
 print("Num GPUs Available: ", len(tf.config.experimental.list_physical_devices('GPU')))
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--input", required=True, help="input file of unaugmented data")
+###### paths to ckip and CwnGraph's datas ##########
+ap.add_argument("--ckipdata", required = False, default ='./data', help="ckip data's location")
+ap.add_argument("--cwngit", required = False, default = './CwnGraph', help="cwn git's location")
+ap.add_argument("--cwn_py", required = True, default = './cwn_graph.pyobj', help="cwn_pyobj's location")
+###### out, hyperparams ########
 ap.add_argument("--output", required=False,  help="output file of unaugmented data")
-ap.add_argument("--num_aug", required=False, default = 1, type=int, help="number of augmented sentences per original sentence")
+ap.add_argument("--num_aug", required=False, default = 2, type=int, help="number of augmented sentences per original sentence")
 ap.add_argument("--alpha_sr", required=False, type = float, help="percent of words in each sentence to be replaced by synonyms")
 ap.add_argument("--alpha_ri", required=False, type = float, help="percent of words in each sentence to be inserted")
 ap.add_argument("--alpha_rs", required=False, type = float, help="percent of words in each sentence to be swapped")
@@ -43,8 +49,13 @@ else:
         output = './out.csv'
     elif args.input.endswith('.json'):
         output = './out.json'
-myseed = args.seed
-functions.seed_in(myseed)
+if args.seed:
+    myseed = args.seed
+else:myseed = '0'
+cwn_py_path = os.path.abspath(args.cwn_py)
+cwn_git_path = os.path.abspath(args.cwngit)
+subprocess.call(['python3', 'functions.py', myseed, cwn_py_path , cwn_git_path])
+
 
 #how much to replace each word by synonyms
 alpha_sr = 0.1 # default
@@ -86,7 +97,7 @@ Med_terms =  {
 
 # initiate outside to prevent repetitive initiation
 Med_dict = construct_dictionary(Med_terms)
-WordSeger = WS("./data")
+WordSeger = WS(os.path.abspath(args.ckipdata))
 
 def ParagraphSeg(Parg):
     splitP = re.split('(。)',  Parg)
