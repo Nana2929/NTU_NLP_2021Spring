@@ -12,10 +12,24 @@ from torch.utils.data import TensorDataset, DataLoader
 import random
 from transformers import AdamW, set_seed
 import time
+
+def set_seeds(seed):
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True  
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Finetune a transformers model on a Classification task")
     parser.add_argument(
         "--train_file", type=str, default='./data/Train_risk_classification_ans.csv', help="A json file containing the training data."
+    )
+    parser.add_argument(
+        "--eval_file", type=str, default='./data/Develop_risk_classification.csv', help="A json file containing the training data."
     )
     parser.add_argument(
         "--preprocessing_num_workers", type=int, default=4, help="A csv or a json file containing the training data."
@@ -42,13 +56,13 @@ def parse_args():
     parser.add_argument(
         "--per_device_train_batch_size",
         type=int,
-        default=4,
+        default=8,
         help="Batch size (per device) for the training dataloader.",
     )
     parser.add_argument(
         "--per_device_eval_batch_size",
         type=int,
-        default=4,
+        default=8,
         help="Batch size (per device) for the evaluation dataloader.",
     )
     parser.add_argument(
@@ -58,7 +72,7 @@ def parse_args():
         help="Initial learning rate (after the potential warmup period) to use.",
     )
     parser.add_argument("--weight_decay", type=float, default=0.0, help="Weight decay to use.")
-    parser.add_argument("--num_train_epochs", type=int, default=3, help="Total number of training epochs to perform.")
+    parser.add_argument("--num_train_epochs", type=int, default=10, help="Total number of training epochs to perform.")
     parser.add_argument(
         "--max_train_steps",
         type=int,
@@ -68,11 +82,11 @@ def parse_args():
     parser.add_argument(
         "--gradient_accumulation_steps",
         type=int,
-        default=8,
+        default=4,
         help="Number of updates steps to accumulate before performing a backward/update pass.",
     )
     parser.add_argument("--save_model_dir", type=str, default='./task1_model', help="Where to store the final model.")
-    parser.add_argument("--seed", type=int, default=43, help="A seed for reproducible training.")
+    parser.add_argument("--seed", type=int, default=1027, help="A seed for reproducible training.")
     parser.add_argument(
         "--doc_stride",
         type=int,
@@ -184,8 +198,8 @@ def main(args):
             y_pred = softmax(outputs.logits).cpu().data.numpy()
             y = batch.labels.cpu().data.numpy()
             for i, example_id in enumerate(example_ids):
-                y_preds[example_id][0] += y_pred[i][0]
-                y_preds[example_id][1] += y_pred[i][1]
+                y_preds[example_id][0] += np.log(y_pred[i][0])
+                y_preds[example_id][1] += np.log(y_pred[i][1])
                 y_trues[example_id] = y[i]
             loss = outputs.loss
             loss = loss / args.gradient_accumulation_steps
@@ -195,7 +209,7 @@ def main(args):
                 optimizer.step()
                 optimizer.zero_grad()
             print(f'[{step:3d}/{num_train_batch}]',end='\r')
-        train_acc = (np.sum(np.argmax(y_preds, axis=1) == y_trues) - num_eval_samples)/num_train_samples
+        train_acc = (np.sum(np.argmax(y_preds, axis=1) == y_trues) - num_eval_samples - 1)/num_train_samples
         train_loss /= num_train_batch
         
 
@@ -212,26 +226,27 @@ def main(args):
                 y_pred = softmax(outputs.logits).cpu().data.numpy()
                 y = batch.labels.cpu().data.numpy()
                 for i,example_id in enumerate(example_ids):
-                    y_preds[example_id][0] += y_pred[i][0]
-                    y_preds[example_id][1] += y_pred[i][1]
+                    y_preds[example_id][0] += np.log(y_pred[i][0])
+                    y_preds[example_id][1] += np.log(y_pred[i][1])
                     y_trues[example_id] = y[i]
                 loss = outputs.loss
                 eval_loss += loss.item()
         # sum logP
-        eval_acc = (np.sum(np.argmax(y_preds, axis=1) == y_trues) - num_train_samples)/num_eval_samples
+        eval_acc = (np.sum(np.argmax(y_preds, axis=1) == y_trues) - num_train_samples - 1)/num_eval_samples
         eval_loss /= num_eval_batch
 
         print(f'epoch [{epoch+1:02d}/{args.num_train_epochs:02d}]: {time.time()-epoch_start_time:.2f} sec(s)')
         print(f'train loss: {train_loss:.4f}, train acc: {train_acc:.4f}')
         print(f' eval loss: {eval_loss:.4f},  eval acc: {eval_acc:.4f}')
         
-        model.save_pretrained(args.save_model_dir)
-
+        # model.save_pretrained(args.save_model_dir)
+    print('log')
     return
 
 if __name__ == "__main__":
     args = parse_args()
     if args.seed is not None:
         set_seed(args.seed)
+        set_seeds(args.seed)
     main(args)
 
