@@ -28,10 +28,10 @@ ap.add_argument("--cwn_py", required = True, default = './cwn_graph.pyobj', help
 ###### out, hyperparams ########
 ap.add_argument("--output", required=False,  help="output file of unaugmented data")
 ap.add_argument("--num_aug", required=False, default = 2, type=int, help="number of augmented sentences per original sentence")
-ap.add_argument("--alpha_sr", required=False, type = float, help="percent of words in each sentence to be replaced by synonyms")
-ap.add_argument("--alpha_ri", required=False, type = float, help="percent of words in each sentence to be inserted")
-ap.add_argument("--alpha_rs", required=False, type = float, help="percent of words in each sentence to be swapped")
-ap.add_argument("--alpha_rd", required=False, type = float, help="percent of words in each sentence to be deleted")
+ap.add_argument("--alpha_sr", required=False, default = 0.1, type = float, help="percent of words in each sentence to be replaced by synonyms")
+ap.add_argument("--alpha_ri", required=False, default = 0.1, type = float, help="percent of words in each sentence to be inserted")
+ap.add_argument("--alpha_rs", required=False, default = 0.1, type = float, help="percent of words in each sentence to be swapped")
+ap.add_argument("--alpha_rd", required=False, default = 0.1, type = float, help="percent of words in each sentence to be deleted")
 ap.add_argument("--seed", required = False, default = 0, type = int, help="random seed")
 args = ap.parse_args()
 ### refresh functions ###
@@ -50,31 +50,20 @@ else:
         output = './out.json'
 if args.seed:
     myseed = args.seed
-else:myseed = '0'
+else: myseed = '0'
 cwn_py_path = os.path.abspath(args.cwn_py)
 cwn_git_path = os.path.abspath(args.cwngit)
 subprocess.call(['python3', 'functions.py', myseed, cwn_py_path , cwn_git_path])
 
 
 #how much to replace each word by synonyms
-alpha_sr = 0.1 # default
-if args.alpha_sr is not None:
-    alpha_sr = args.alpha_sr
-
+alpha_sr = args.alpha_sr
 # how much to insert new words that are synonyms
-alpha_ri = 0.1 # default
-if args.alpha_ri is not None:
-    alpha_ri = args.alpha_ri
-
+alpha_ri = args.alpha_ri
 # how much to swap words
-alpha_rs = 0.1 # default
-if args.alpha_rs is not None:
-    alpha_rs = args.alpha_rs
-
+alpha_rs = args.alpha_rs
 # how much to delete words
-alpha_rd = 0.1 # default
-if args.alpha_rd is not None:
-    alpha_rd = args.alpha_rd
+alpha_rd = args.alpha_rd
 
 if alpha_sr == alpha_ri == alpha_rs == alpha_rd == 0:
      ap.error('At least one alpha should be greater than zero')
