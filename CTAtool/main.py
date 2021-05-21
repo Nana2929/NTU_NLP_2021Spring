@@ -13,20 +13,25 @@ import os
 import json
 import unicodedata
 import copy
-from ckiptagger import data_utils, construct_dictionary, WS, POS, NER
-import jsonlines
+from ckiptagger import construct_dictionary, WS
 from tqdm import tqdm
 import tensorflow as tf
+import subprocess
 print("Num GPUs Available: ", len(tf.config.experimental.list_physical_devices('GPU')))
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--input", required=True, help="input file of unaugmented data")
+###### paths to ckip and CwnGraph's datas ##########
+ap.add_argument("--ckipdata", required = False, default ='./data', help="ckip data's location")
+ap.add_argument("--cwngit", required = False, default = './CwnGraph', help="cwn git's location")
+ap.add_argument("--cwn_py", required = True, default = './cwn_graph.pyobj', help="cwn_pyobj's location")
+###### out, hyperparams ########
 ap.add_argument("--output", required=False,  help="output file of unaugmented data")
-ap.add_argument("--num_aug", required=False, default = 1, type=int, help="number of augmented sentences per original sentence")
-ap.add_argument("--alpha_sr", required=False, type = float, help="percent of words in each sentence to be replaced by synonyms")
-ap.add_argument("--alpha_ri", required=False, type = float, help="percent of words in each sentence to be inserted")
-ap.add_argument("--alpha_rs", required=False, type = float, help="percent of words in each sentence to be swapped")
-ap.add_argument("--alpha_rd", required=False, type = float, help="percent of words in each sentence to be deleted")
+ap.add_argument("--num_aug", required=False, default = 2, type=int, help="number of augmented sentences per original sentence")
+ap.add_argument("--alpha_sr", required=False, default = 0.1, type = float, help="percent of words in each sentence to be replaced by synonyms")
+ap.add_argument("--alpha_ri", required=False, default = 0.1, type = float, help="percent of words in each sentence to be inserted")
+ap.add_argument("--alpha_rs", required=False, default = 0.1, type = float, help="percent of words in each sentence to be swapped")
+ap.add_argument("--alpha_rd", required=False, default = 0.1, type = float, help="percent of words in each sentence to be deleted")
 ap.add_argument("--seed", required = False, default = 0, type = int, help="random seed")
 args = ap.parse_args()
 ### refresh functions ###
@@ -43,28 +48,22 @@ else:
         output = './out.csv'
     elif args.input.endswith('.json'):
         output = './out.json'
-myseed = args.seed
-functions.seed_in(myseed)
+if args.seed:
+    myseed = args.seed
+else: myseed = '0'
+cwn_py_path = os.path.abspath(args.cwn_py)
+cwn_git_path = os.path.abspath(args.cwngit)
+subprocess.call(['python3', 'functions.py', myseed, cwn_py_path , cwn_git_path])
+
 
 #how much to replace each word by synonyms
-alpha_sr = 0.1 # default
-if args.alpha_sr is not None:
-    alpha_sr = args.alpha_sr
-
+alpha_sr = args.alpha_sr
 # how much to insert new words that are synonyms
-alpha_ri = 0.1 # default
-if args.alpha_ri is not None:
-    alpha_ri = args.alpha_ri
-
+alpha_ri = args.alpha_ri
 # how much to swap words
-alpha_rs = 0.1 # default
-if args.alpha_rs is not None:
-    alpha_rs = args.alpha_rs
-
+alpha_rs = args.alpha_rs
 # how much to delete words
-alpha_rd = 0.1 # default
-if args.alpha_rd is not None:
-    alpha_rd = args.alpha_rd
+alpha_rd = args.alpha_rd
 
 if alpha_sr == alpha_ri == alpha_rs == alpha_rd == 0:
      ap.error('At least one alpha should be greater than zero')
@@ -86,7 +85,7 @@ Med_terms =  {
 
 # initiate outside to prevent repetitive initiation
 Med_dict = construct_dictionary(Med_terms)
-WordSeger = WS("./data")
+WordSeger = WS(os.path.abspath(args.ckipdata))
 
 def ParagraphSeg(Parg):
     splitP = re.split('(。)',  Parg)
@@ -94,11 +93,14 @@ def ParagraphSeg(Parg):
     return seg_sents 
 
 # generate more data with standard augmentation
-def gen_eda(train_orig, output_file, alpha_sr, alpha_ri, alpha_rs, alpha_rd, num_aug = 1):
+def gen_eda(train_orig, output_file, alpha_sr, alpha_ri, alpha_rs, alpha_rd, num_aug = 2):
     '''read & write file'''
     output_file = os.path.abspath(str(output_file))
     input_file = os.path.abspath(str(train_orig))
+    print('---------- Chinese Text Augmentation ------------')
+    print('* Expected augmented size: original_datasize * (num_aug+1), default num_aug=2')
     if input_file.endswith('.csv'):
+        # classification file 
         output_file = os.path.abspath(str(output_file))
         input_file = os.path.abspath(str(train_orig))
         df = pd.read_csv(input_file)
@@ -117,7 +119,6 @@ def gen_eda(train_orig, output_file, alpha_sr, alpha_ri, alpha_rs, alpha_rd, num
             for j, sent in enumerate(seged_par):
                 aug_sents = eda(sent, alpha_sr=alpha_sr, alpha_ri=alpha_ri, alpha_rs=alpha_rs, p_rd=alpha_rd, num_aug = num_aug)
                 # a list of augmented sentence based on the current sentence
-                # print('aug_sents ', aug_sents)
                 aug_sents_per_par.append(aug_sents) 
                 AUG_LEN = len(aug_sents)
           
@@ -137,7 +138,7 @@ def gen_eda(train_orig, output_file, alpha_sr, alpha_ri, alpha_rs, alpha_rd, num
                 out_data['label'].append(labels[i])     
         new_df = pd.DataFrame(out_data, columns=['article_id','text', 'label'])
         print(f'The augmented data size is {len(new_df)}')
-        new_df.to_csv(output_file, index = False)
+        new_df.to_csv(output_file, index = True)
             
     elif input_file.endswith('.json'):
         # qa file 
@@ -151,7 +152,11 @@ def gen_eda(train_orig, output_file, alpha_sr, alpha_ri, alpha_rs, alpha_rd, num
         jsondicts = []
         cnt = 0
         decoded_json = unicodedata.normalize("NFKC", open(input_file, "r", encoding="utf-8").read())
+        question_id = 1
+        
         for data in tqdm(json.loads(decoded_json)):
+            data['id'] = question_id 
+            question_id+=1
             jsondicts.append(data)
             cnt += 1
             par = data['text']
@@ -161,10 +166,11 @@ def gen_eda(train_orig, output_file, alpha_sr, alpha_ri, alpha_rs, alpha_rd, num
             
             for j, sent in enumerate(s_par):
                 aug_sents = eda(sent, alpha_sr=alpha_sr, alpha_ri=alpha_ri, alpha_rs=alpha_rs, p_rd=alpha_rd, num_aug = num_aug)
+                # print(aug_sents)
                 aug_sents_per_par.append(aug_sents[:-1]) # del the last sent(orig sent because we have appended it) 
                 AUG_LEN = len(aug_sents)-1
             # here we should have a aug_sents_per_par with each sentence multiplicated to {num_aug+1} number
-            
+            # print('aug len:', AUG_LEN)
             aug_pars = [''] * AUG_LEN 
             for sidx in range(len(aug_sents_per_par)):
                 m = 0
@@ -178,15 +184,21 @@ def gen_eda(train_orig, output_file, alpha_sr, alpha_ri, alpha_rs, alpha_rd, num
             for aug_par in aug_pars:
                 new_data = copy.deepcopy(data)
                 new_data['text'] = aug_par 
+                new_data['id'] = question_id
+                question_id += 1
                 jsondicts.append(new_data)
-            # if cnt > 10:
-            #   break
+            # if cnt > 1:
+            #     break
             
         print(f'The original data size is {cnt}')
         print(f'The augmented data size is {len(jsondicts)}')
-        print('Note: Outputting a jsonlines file because of decoding problems.')
-        with jsonlines.open(output_file, mode='w') as writer:
-            writer.write_all(jsondicts)
+        with open(output_file, 'w', encoding = 'utf-8') as f:
+            f.write(
+                json.dumps(jsondicts,ensure_ascii=False))
+
+        # with jsonlines.open(output_file, mode='w') as writer:
+        #    print('Note: Outputting a jsonlines file because of decoding problems.')
+        #    writer.write_all(jsondicts)
         
     else:
         raise TypeError('File type not supported')
@@ -196,7 +208,7 @@ def gen_eda(train_orig, output_file, alpha_sr, alpha_ri, alpha_rs, alpha_rd, num
 if __name__ == "__main__":
     # generate augmented sentences and output into a new file
     if args.num_aug: num_aug = args.num_aug 
-    else:num_aug = 1 
+    else:num_aug = 2 
     gen_eda(args.input, output, alpha_sr=alpha_sr, alpha_ri=alpha_ri, alpha_rs=alpha_rs, alpha_rd=alpha_rd, num_aug = num_aug)
 
 

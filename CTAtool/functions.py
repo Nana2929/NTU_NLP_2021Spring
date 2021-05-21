@@ -1,19 +1,25 @@
 import sys
+import os
 import random
 from random import shuffle
 import re
 from copy import deepcopy 
-sys.path.append('/CwnGraph')
 ######### Synonym Replacement ##########
 # !git clone https://github.com/lopentu/CwnGraph
 # !gdown --id '1opGRw490cAizoj2JHzR8UIZME3Mc65Ze' --output cwn_graph.pyobj
-# !unzip -o cwn_graph.pyobj
-from CwnGraph import CwnBase
 
 def seed_in(s):
     random.seed(s)
+
 def main():
-    seed_in(sys.argv[1])
+    seed_in(int(sys.argv[1]))
+    cwngpath = sys.argv[2]
+    cwngit = sys.argv[3]
+    sys.path.append(cwngit)
+    from CwnGraph import CwnBase
+    CwnBase.install_cwn(cwngpath) 
+    global cwn
+    cwn = CwnBase()
 
 ####### Remove Dummies ######
 def RemoveDummies(string):
@@ -30,8 +36,6 @@ def RemoveDummies(string):
     if len(new_string) == 0: new_string.append('')
     return new_string 
 
-CwnBase.install_cwn("./cwn_graph.pyobj")
-cwn = CwnBase()
 def SynReplacement(words, n, verbose = False):
     ''' n: number of replacement'''
     new_words = words.copy()
@@ -146,7 +150,7 @@ def eda(sentence, alpha_sr=0.1, alpha_ri=0.1, alpha_rs=0.1, p_rd=0.1, num_aug = 
     
     words = RemoveDummies(sentence)
     num_words = len(sentence)
-    num_new_per_technique = int(num_aug/3)+1 
+    num_new_per_technique = int(num_aug/4)+1
     augmented_sentences = []
   	#sr
     if (alpha_sr > 0): 
