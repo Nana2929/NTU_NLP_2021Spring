@@ -14,7 +14,6 @@ import json
 import unicodedata
 import copy
 from ckiptagger import construct_dictionary, WS
-import jsonlines
 from tqdm import tqdm
 import tensorflow as tf
 import subprocess
@@ -150,7 +149,7 @@ def gen_eda(train_orig, output_file, alpha_sr, alpha_ri, alpha_rs, alpha_rd, num
                 out_data['label'].append(labels[i])     
         new_df = pd.DataFrame(out_data, columns=['article_id','text', 'label'])
         print(f'The augmented data size is {len(new_df)}')
-        new_df.to_csv(output_file, index = False)
+        new_df.to_csv(output_file, index = True)
             
     elif input_file.endswith('.json'):
         # qa file 
@@ -204,9 +203,13 @@ def gen_eda(train_orig, output_file, alpha_sr, alpha_ri, alpha_rs, alpha_rd, num
             
         print(f'The original data size is {cnt}')
         print(f'The augmented data size is {len(jsondicts)}')
-        print('Note: Outputting a jsonlines file because of decoding problems.')
-        with jsonlines.open(output_file, mode='w') as writer:
-            writer.write_all(jsondicts)
+        with open(output_file, 'w', encoding = 'utf-8') as f:
+            f.write(
+                json.dumps(jsondicts,ensure_ascii=False))
+
+        # with jsonlines.open(output_file, mode='w') as writer:
+        #    print('Note: Outputting a jsonlines file because of decoding problems.')
+        #    writer.write_all(jsondicts)
         
     else:
         raise TypeError('File type not supported')
