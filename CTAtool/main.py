@@ -8,7 +8,6 @@ import argparse
 import functions
 from functions import *
 import pandas as pd 
-import csv 
 import os
 import json
 import unicodedata
@@ -23,7 +22,7 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--input", required=True, help="input file of unaugmented data")
 ###### paths to ckip and CwnGraph's datas ##########
 ap.add_argument("--ckipdata", required = False, default ='./data', help="ckip data's location")
-ap.add_argument("--cwngit", required = False, default = './CwnGraph', help="cwn git's location")
+ap.add_argument("--cwngit", required = False, default = './CwnGraph', help="cwn github's location")
 ap.add_argument("--cwn_py", required = True, default = './cwn_graph.pyobj', help="cwn_pyobj's location")
 ###### out, hyperparams ########
 ap.add_argument("--output", required=False,  help="output file of unaugmented data")
@@ -104,10 +103,10 @@ def gen_eda(train_orig, output_file, alpha_sr, alpha_ri, alpha_rs, alpha_rd, num
         output_file = os.path.abspath(str(output_file))
         input_file = os.path.abspath(str(train_orig))
         df = pd.read_csv(input_file)
+        article_count=1
         ###########
-        # df = df[:20]
+        # df = df[:3]
         ############
-        article_ids = df['article_id'].tolist()
         texts = df['text'].tolist()
         labels = df['label'].tolist()
         print(f'The original data size is {len(df)}')
@@ -133,9 +132,10 @@ def gen_eda(train_orig, output_file, alpha_sr, alpha_ri, alpha_rs, alpha_rd, num
               # after the while loop, the aug_pars should have one aug_sent into each aug_pars[i] 
             # aug_pars should contain augmented paragraphs for the current paragraph 
             for aug_par in aug_pars:
-                out_data['article_id'].append(article_ids[i])
+                out_data['article_id'].append(article_count)
                 out_data['text'].append(aug_par)
-                out_data['label'].append(labels[i])     
+                out_data['label'].append(labels[i])   
+                article_count+=1  
         new_df = pd.DataFrame(out_data, columns=['article_id','text', 'label'])
         print(f'The augmented data size is {len(new_df)}')
         new_df.to_csv(output_file, index = True)
