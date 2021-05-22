@@ -31,10 +31,7 @@ def set_seeds(seed):
 def parse_args():
     parser = argparse.ArgumentParser(description="Finetune a transformers model on a Classification task")
     parser.add_argument(
-        "--train_file", type=str, default='./data/Train_risk_classification_ans.csv', help="A json file containing the training data."
-    )
-    parser.add_argument(
-        "--eval_file", type=str, default='./data/Develop_risk_classification.csv', help="A json file containing the training data."
+        "--test_file", type=str, default='./data/Develop_risk_classification.csv', help="A json file containing the testing data."
     )
     parser.add_argument(
         "--preprocessing_num_workers", type=int, default=4, help="A csv or a json file containing the training data."
@@ -109,9 +106,9 @@ def parse_args():
         help="The ID of the device you would like to use.",
     )
     parser.add_argument(
-        "--train_full",
-        action="store_true",
-        help="Training with full training data.",
+        "--mdl_ckpt",
+        default='./task1_model',
+        help="Where to load the pretrained model.",
     )
     args = parser.parse_args()
 
@@ -142,39 +139,25 @@ def main(args):
         sample_mapping = tokenized_examples.pop("overflow_to_sample_mapping")
         tokenized_examples.pop("offset_mapping")
         # Let's label those examples!
-        tokenized_examples["labels"] = []  # 0 or 1 
         tokenized_examples["example_id"] = []
         for sample_index in sample_mapping:
             # Grab the sequence corresponding to that example (to know what is the context and what is the question).
             
             # One example can give several spans, this is the index of the example containing this span of text.
             tokenized_examples["example_id"].append(examples["article_id"][sample_index])
-            tokenized_examples['labels'].append(int(examples['label'][sample_index]))
         return tokenized_examples
 
-    raw_dataset = datasets.load_dataset("csv", data_files=args.train_file)
-    train_dataset = raw_dataset['train'].map(normalize_text)
-    raw_dataset = raw_dataset['train'].train_test_split(test_size=0.1)
+    raw_dataset = datasets.load_dataset("csv", data_files=args.test_file)['train']
     # if args.debug:
     #     for split in raw_dataset.keys():
     #         raw_dataset[split] = raw_dataset[split].select(range(20))
-
-    if not args.train_full:
-        train_dataset = raw_dataset['train'].map(normalize_text)
-    eval_dataset = raw_dataset['test'].map(normalize_text)
-    column_names = raw_dataset["train"].column_names
-    train_ids = train_dataset['article_id']
-    eval_ids = eval_dataset['article_id']
-    num_train_samples = len(train_dataset)
-    num_eval_samples = len(eval_dataset)
-    num_samples = num_train_samples + num_eval_samples
-    train_dataset = train_dataset.map(
-            prepare_train_features,
-            batched=True,
-            num_proc=4,
-            remove_columns=column_names,
-    )
-    eval_dataset = eval_dataset.map(
+    test_dataset = raw_dataset.map(normalize_text)
+    column_names = raw_dataset.column_names
+    test_ids = test_dataset['article_id']
+    num_test_samples = len(test_dataset)
+    num_samples = num_test_samples 
+    
+    test_dataset = test_dataset.map(
             prepare_train_features,
             batched=True,
             num_proc=4,
@@ -182,105 +165,42 @@ def main(args):
     )
     
     data_collator = DataCollatorWithPadding(tokenizer)
-    train_dataloader = DataLoader(train_dataset, shuffle=True, collate_fn=data_collator, batch_size=args.per_device_train_batch_size)
-    eval_dataloader = DataLoader(eval_dataset, collate_fn=data_collator, batch_size=args.per_device_eval_batch_size)
-    num_train_batch = len(train_dataloader)
-    num_eval_batch = len(eval_dataloader)
-    model = AutoModelForSequenceClassification.from_pretrained(args.model_name, num_labels=2).to(args.device)
-    no_decay = ["bias", "LayerNorm.weight"]
-    optimizer_grouped_parameters = [
-        {
-            "params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
-            "weight_decay": args.weight_decay,
-        },
-        {
-            "params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)],
-            "weight_decay": 0.0,
-        },
-    ]
-    optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate)
+    test_dataloader = DataLoader(test_dataset, shuffle=False, collate_fn=data_collator, batch_size=args.per_device_train_batch_size)
+    num_test_batch = len(test_dataloader)
+    model = AutoModelForSequenceClassification.from_pretrained(args.mdl_ckpt, num_labels=2).to(args.device)
     torch_softmax = nn.Softmax(dim=1)
-    best_auroc = float('-inf')
-    for epoch in range(args.num_train_epochs):
-        epoch_start_time = time.time()
-        model.train()
-        train_loss = 0
-        y_preds = np.zeros((num_samples+1, 2))
-        y_trues = np.zeros(num_samples+1)
-        for step, batch in enumerate(train_dataloader):
-            example_ids = batch.pop('example_id').tolist()
-            # print(example_ids)
-            # exit()
+    model.eval()
+    y_preds = []
+    article_ids = []
+    last_example_id = -1
+    for step, batch in enumerate(test_dataloader):
+        with torch.no_grad():
+            example_ids = batch.pop('example_id')
             for i in batch.keys():
                 batch[i] = batch[i].to(args.device)
             outputs = model(**batch)
             y_pred = torch_softmax(outputs.logits).cpu().data.numpy()
-            y = batch.labels.cpu().data.numpy()
             for i, example_id in enumerate(example_ids):
-                y_preds[example_id][0] += np.log(y_pred[i][0])
-                y_preds[example_id][1] += np.log(y_pred[i][1])
-                y_trues[example_id] = y[i]
-            loss = outputs.loss
-            loss = loss / args.gradient_accumulation_steps
-            loss.backward()
-            train_loss += loss.item()
-            if (step+1) % args.gradient_accumulation_steps == 0 or (step+1) == len(train_dataloader):
-                optimizer.step()
-                optimizer.zero_grad()
-            print(f'[{step:3d}/{num_train_batch}]',end='\r')
-        train_acc = (np.sum(np.argmax(y_preds, axis=1) == y_trues) - num_eval_samples - 1)/num_train_samples
-        train_loss /= num_train_batch
+                # y_preds[example_id][0] += np.log(y_pred[i][0])
+                # y_preds[example_id][1] += np.log(y_pred[i][1])
+                if example_id != last_example_id:
+                    y_preds.append([0, 0])
+                    article_ids.append(example_id)
+                # zero_score = 1 if y_pred[i][0] > y_pred[i][1] else 0
+                # one_score = 1 - zero_score
+                y_preds[-1][0] += np.log(y_pred[i][0])
+                y_preds[-1][1] += np.log(y_pred[i][1])
+                last_example_id = example_id
+
+    article_ids = np.array(article_ids)
+    y_preds = softmax(np.array(y_preds), axis=1)[:, 1]
+
+    assert article_ids.shape == y_preds.shape
+
+    output = np.vstack((article_ids, y_preds)).T
+    np.savetxt('decision.csv', output, delimiter=',', header='article_id,probability',fmt="%i,%f")
         
-
-        model.eval()
-        eval_loss = 0
-        y_preds = np.zeros((num_samples+1,2))
-        y_trues = np.zeros(num_samples+1)
-        y_preds = []
-        y_trues = []
-        last_example_id = -1
-        for step, batch in enumerate(eval_dataloader):
-            with torch.no_grad():
-                example_ids = batch.pop('example_id')
-                for i in batch.keys():
-                    batch[i] = batch[i].to(args.device)
-                outputs = model(**batch)
-                y_pred = torch_softmax(outputs.logits).cpu().data.numpy()
-                y = batch.labels.cpu().data.numpy()
-                for i, example_id in enumerate(example_ids):
-                    # y_preds[example_id][0] += np.log(y_pred[i][0])
-                    # y_preds[example_id][1] += np.log(y_pred[i][1])
-                    if example_id != last_example_id:
-                        y_trues.append(y[i])
-                        y_preds.append([0, 0])
-                    # zero_score = 1 if y_pred[i][0] > y_pred[i][1] else 0
-                    # one_score = 1 - zero_score
-                    y_preds[-1][0] += np.log(y_pred[i][0])
-                    y_preds[-1][1] += np.log(y_pred[i][1])
-                    last_example_id = example_id
-
-                loss = outputs.loss
-                eval_loss += loss.item()
-        # sum logP
-        # eval_acc = (np.sum(np.argmax(y_preds, axis=1) == y_trues) - num_train_samples - 1)/num_eval_samples
-        try:
-            assert len(y_trues) == len(y_preds)
-        except:
-            ipdb.set_trace()
-        eval_acc = np.sum(np.argmax(np.array(y_preds), axis=1) == np.array(y_trues)) / len(y_trues)
-        eval_auroc = roc_auc_score(np.array(y_trues), softmax(np.array(y_preds), axis=1)[:, 1])
-        eval_loss /= num_eval_batch
-
-        print(f'epoch [{epoch+1:02d}/{args.num_train_epochs:02d}]: {time.time()-epoch_start_time:.2f} sec(s)')
-        print(f'train loss: {train_loss:.4f}, train acc: {train_acc:.4f}')
-        print(f' eval loss: {eval_loss:.4f},  eval acc: {eval_acc:.4f}, eval auroc: {eval_auroc:.4f}')
-        
-        if eval_auroc > best_auroc:
-            best_auroc = eval_auroc
-            model.save_pretrained(args.save_model_dir)
-            print(f"Saving model at eval auroc {eval_auroc:.4f}")
-
-    print('Done')
+    print('Done Testing')
     return
 
 if __name__ == "__main__":
