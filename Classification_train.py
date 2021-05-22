@@ -12,6 +12,11 @@ from torch.utils.data import TensorDataset, DataLoader
 import random
 from transformers import AdamW, set_seed
 import time
+import ipdb
+from utils import normalize_text
+from sklearn.metrics import roc_auc_score
+from scipy.special import softmax
+
 
 def set_seeds(seed):
     torch.manual_seed(seed)
@@ -56,7 +61,7 @@ def parse_args():
     parser.add_argument(
         "--per_device_train_batch_size",
         type=int,
-        default=8,
+        default=12,
         help="Batch size (per device) for the training dataloader.",
     )
     parser.add_argument(
@@ -71,7 +76,7 @@ def parse_args():
         default=5e-5,
         help="Initial learning rate (after the potential warmup period) to use.",
     )
-    parser.add_argument("--weight_decay", type=float, default=0.0, help="Weight decay to use.")
+    parser.add_argument("--weight_decay", type=float, default=5e-7, help="Weight decay to use.")
     parser.add_argument("--num_train_epochs", type=int, default=10, help="Total number of training epochs to perform.")
     parser.add_argument(
         "--max_train_steps",
@@ -98,6 +103,11 @@ def parse_args():
         action="store_true",
         help="Activate debug mode and run training only with a subset of data.",
     )
+    parser.add_argument(
+        "--device",
+        default="cuda:1",
+        help="The ID of the device you would like to use.",
+    )
     args = parser.parse_args()
 
     if args.save_model_dir is not None:
@@ -105,30 +115,29 @@ def parse_args():
     return args
 
 
-
-
 def main(args):
-    
     tokenizer = BertTokenizerFast.from_pretrained(args.tokenizer_name)
+
     def prepare_train_features(examples):
         # Tokenize our examples with truncation and maybe padding, but keep the overflows using a stride. This results
         # in one example possible giving several features when a context is long, each of those features having a
         # context that overlaps a bit the context of the previous feature.
-        tokenized_examples  = tokenizer(
-            examples['text'], 
-            truncation= True, 
-            max_length = args.max_seq_length, # max_seq_length
-            stride = args.doc_stride,   
+        tokenized_examples = tokenizer(
+            examples['text'],
+            truncation=True, 
+            max_length=args.max_seq_length,  # max_seq_length
+            stride=args.doc_stride,   
             return_overflowing_tokens=True,
             return_offsets_mapping=True,
-            padding = 'max_length',) # "max_length" 
+            padding='max_length'  # "max_length"
+        )   
         
         # Since one example might give us several features if it has a long context, we need a map from a feature to
         # its corresponding example. This key gives us just that.
         sample_mapping = tokenized_examples.pop("overflow_to_sample_mapping")
         tokenized_examples.pop("offset_mapping")
         # Let's label those examples!
-        tokenized_examples["labels"] = [] # 0 or 1 
+        tokenized_examples["labels"] = []  # 0 or 1 
         tokenized_examples["example_id"] = []
         for sample_index in sample_mapping:
             # Grab the sequence corresponding to that example (to know what is the context and what is the question).
@@ -143,7 +152,8 @@ def main(args):
     # if args.debug:
     #     for split in raw_dataset.keys():
     #         raw_dataset[split] = raw_dataset[split].select(range(20))
-    train_dataset, eval_dataset = raw_dataset['train'], raw_dataset['test']
+    train_dataset = raw_dataset['train'].map(normalize_text)
+    eval_dataset = raw_dataset['test'].map(normalize_text)
     column_names = raw_dataset["train"].column_names
     train_ids = train_dataset['article_id']
     eval_ids = eval_dataset['article_id']
@@ -155,20 +165,20 @@ def main(args):
             batched=True,
             num_proc=4,
             remove_columns=column_names,
-        )
+    )
     eval_dataset = eval_dataset.map(
             prepare_train_features,
             batched=True,
             num_proc=4,
             remove_columns=column_names,
-        )
+    )
     
     data_collator = DataCollatorWithPadding(tokenizer)
     train_dataloader = DataLoader(train_dataset, shuffle=True, collate_fn=data_collator, batch_size=args.per_device_train_batch_size)
     eval_dataloader = DataLoader(eval_dataset, collate_fn=data_collator, batch_size=args.per_device_eval_batch_size)
     num_train_batch = len(train_dataloader)
     num_eval_batch = len(eval_dataloader)
-    model = AutoModelForSequenceClassification.from_pretrained(args.model_name, num_labels = 2).cuda()
+    model = AutoModelForSequenceClassification.from_pretrained(args.model_name, num_labels=2).to(args.device)
     no_decay = ["bias", "LayerNorm.weight"]
     optimizer_grouped_parameters = [
         {
@@ -181,21 +191,21 @@ def main(args):
         },
     ]
     optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate)
-    softmax = nn.Softmax(dim=1)
+    torch_softmax = nn.Softmax(dim=1)
     for epoch in range(args.num_train_epochs):
         epoch_start_time = time.time()
         model.train()
         train_loss = 0
-        y_preds = np.zeros((num_samples+1,2))
+        y_preds = np.zeros((num_samples+1, 2))
         y_trues = np.zeros(num_samples+1)
         for step, batch in enumerate(train_dataloader):
             example_ids = batch.pop('example_id').tolist()
             # print(example_ids)
             # exit()
             for i in batch.keys():
-                batch[i] = batch[i].cuda()
+                batch[i] = batch[i].to(args.device)
             outputs = model(**batch)
-            y_pred = softmax(outputs.logits).cpu().data.numpy()
+            y_pred = torch_softmax(outputs.logits).cpu().data.numpy()
             y = batch.labels.cpu().data.numpy()
             for i, example_id in enumerate(example_ids):
                 y_preds[example_id][0] += np.log(y_pred[i][0])
@@ -217,27 +227,44 @@ def main(args):
         eval_loss = 0
         y_preds = np.zeros((num_samples+1,2))
         y_trues = np.zeros(num_samples+1)
+        y_preds = []
+        y_trues = []
+        last_example_id = -1
         for step, batch in enumerate(eval_dataloader):
             with torch.no_grad():
                 example_ids = batch.pop('example_id')
                 for i in batch.keys():
-                    batch[i] = batch[i].cuda()
+                    batch[i] = batch[i].to(args.device)
                 outputs = model(**batch)
-                y_pred = softmax(outputs.logits).cpu().data.numpy()
+                y_pred = torch_softmax(outputs.logits).cpu().data.numpy()
                 y = batch.labels.cpu().data.numpy()
-                for i,example_id in enumerate(example_ids):
-                    y_preds[example_id][0] += np.log(y_pred[i][0])
-                    y_preds[example_id][1] += np.log(y_pred[i][1])
-                    y_trues[example_id] = y[i]
+                for i, example_id in enumerate(example_ids):
+                    # y_preds[example_id][0] += np.log(y_pred[i][0])
+                    # y_preds[example_id][1] += np.log(y_pred[i][1])
+                    if example_id != last_example_id:
+                        y_trues.append(y[i])
+                        y_preds.append([0, 0])
+                    # zero_score = 1 if y_pred[i][0] > y_pred[i][1] else 0
+                    # one_score = 1 - zero_score
+                    y_preds[-1][0] += np.log(y_pred[i][0])
+                    y_preds[-1][1] += np.log(y_pred[i][1])
+                    last_example_id = example_id
+
                 loss = outputs.loss
                 eval_loss += loss.item()
         # sum logP
-        eval_acc = (np.sum(np.argmax(y_preds, axis=1) == y_trues) - num_train_samples - 1)/num_eval_samples
+        # eval_acc = (np.sum(np.argmax(y_preds, axis=1) == y_trues) - num_train_samples - 1)/num_eval_samples
+        try:
+            assert len(y_trues) == len(y_preds)
+        except:
+            ipdb.set_trace()
+        eval_acc = np.sum(np.argmax(np.array(y_preds), axis=1) == np.array(y_trues)) / len(y_trues)
+        eval_auroc = roc_auc_score(np.array(y_trues), softmax(np.array(y_preds), axis=1)[:, 1])
         eval_loss /= num_eval_batch
 
         print(f'epoch [{epoch+1:02d}/{args.num_train_epochs:02d}]: {time.time()-epoch_start_time:.2f} sec(s)')
         print(f'train loss: {train_loss:.4f}, train acc: {train_acc:.4f}')
-        print(f' eval loss: {eval_loss:.4f},  eval acc: {eval_acc:.4f}')
+        print(f' eval loss: {eval_loss:.4f},  eval acc: {eval_acc:.4f}, eval auroc: {eval_auroc:.4f}')
         
         # model.save_pretrained(args.save_model_dir)
     print('log')
