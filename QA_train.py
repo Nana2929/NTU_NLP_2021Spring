@@ -14,7 +14,6 @@
 """
 Fine-tuning a huggingface Transformers model on multiple choice relying on the accelerate library without using a Trainer.
 """
-# You can also adapt this script on your own multiple choice task. Pointers for this are left as comments.
 
 import argparse
 import logging
@@ -28,8 +27,10 @@ from typing import Optional, Union
 
 import datasets
 import torch
+import torch.nn as nn
 from datasets import load_dataset, load_metric
 from torch.utils.data.dataloader import DataLoader
+import time
 
 import transformers
 from transformers import (
@@ -56,8 +57,6 @@ from tqdm.auto import tqdm
 
 logger = logging.getLogger(__name__)
 # You should update this to your particular problem to have better documentation of `model_type`
-MODEL_CONFIG_CLASSES = list(MODEL_MAPPING.keys())
-MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
 
 def set_seeds(seed):
     torch.manual_seed(seed)
@@ -127,13 +126,13 @@ def parse_args():
     parser.add_argument(
         "--per_device_train_batch_size",
         type=int,
-        default=2,
+        default=4,
         help="Batch size (per device) for the training dataloader.",
     )
     parser.add_argument(
         "--per_device_eval_batch_size",
         type=int,
-        default=2,
+        default=4,
         help="Batch size (per device) for the evaluation dataloader.",
     )
     parser.add_argument(
@@ -153,7 +152,7 @@ def parse_args():
     parser.add_argument(
         "--gradient_accumulation_steps",
         type=int,
-        default=16,
+        default=8,
         help="Number of updates steps to accumulate before performing a backward/update pass.",
     )
     parser.add_argument(
@@ -166,14 +165,13 @@ def parse_args():
     parser.add_argument(
         "--num_warmup_steps", type=int, default=0, help="Number of steps for the warmup in the lr scheduler."
     )
-    parser.add_argument("--output_dir", type=str, default='./MCQ_model', help="Where to store the final model.")
+    parser.add_argument("--save_model_dir", type=str, default='./MCQ_model', help="Where to store the final model.")
     parser.add_argument("--seed", type=int, default=None, help="A seed for reproducible training.")
     parser.add_argument(
         "--model_type",
         type=str,
         default=None,
         help="Model type to use if training from scratch.",
-        choices=MODEL_TYPES,
     )
     parser.add_argument(
         "--debug",
@@ -181,6 +179,8 @@ def parse_args():
         help="Activate debug mode and run training only with a subset of data.",
     )
     args = parser.parse_args()
+    if args.save_model_dir is not None:
+        os.makedirs(args.save_model_dir, exist_ok=True)
 
     return args
 
@@ -243,8 +243,7 @@ class DataCollatorForMultipleChoice:
         return batch
 
 
-def main():
-    args = parse_args()
+def main(args):
 
     # Initialize the accelerator. We will let the accelerator handle device placement for us in this example.
     # Make one log on every process with the configuration for debugging.
@@ -259,10 +258,6 @@ def main():
     datasets.utils.logging.set_verbosity_error()
     transformers.utils.logging.set_verbosity_error()
 
-    # If passed along, set the training seed now.
-    if args.seed is not None:
-        set_seed(args.seed)
-        set_seeds(args.seed)
 
     # In distributed training, the load_dataset function guarantee that only one local process can concurrently
     # download the dataset.
@@ -270,15 +265,18 @@ def main():
     data_files = {}
     if args.train_file is not None:
         data_files["train"] = args.train_file
+        data_files["train_eval"] = args.train_file
     if args.validation_file is not None:
         data_files["validation"] = args.validation_file
     extension = args.dataset_script
     raw_datasets = load_dataset(extension, data_files=data_files)
     # Trim a number of training examples
+    num_train_samples = len(raw_datasets['train'])
+    num_eval_samples = len(raw_datasets['validation'])
     if args.debug:
         for split in raw_datasets.keys():
-            raw_datasets[split] = raw_datasets[split].select(range(100))
-
+            raw_datasets[split] = raw_datasets[split].select(range(10))
+    
     if args.model_name_or_path:
         config = AutoConfig.from_pretrained(args.model_name_or_path)
     else:
@@ -311,11 +309,13 @@ def main():
     # Preprocessing the datasets.
     # First we tokenize all the texts.
     def preprocess_function(examples):
-        option = {}
-        option['A'] = [q['stem']+q['choices'][0]['text'] for q in examples['question']] 
-        option['B'] = [q['stem']+q['choices'][1]['text'] for q in examples['question']] 
-        option['C'] = [q['stem']+q['choices'][2]['text'] for q in examples['question']]
-        texts = [p for p in examples['text']]
+        option, texts = {}, {}
+        # option['A'] = [q['stem']+q['choices'][0]['text'] for q in examples['question']] 
+        # option['B'] = [q['stem']+q['choices'][1]['text'] for q in examples['question']] 
+        # option['C'] = [q['stem']+q['choices'][2]['text'] for q in examples['question']]
+        # option[label] = [q['stem']+q['choices'][i]['text'] for q in examples['question']]
+        for i,label in enumerate(['A', 'B', 'C']): option[label] = [q['stem']+q['choices'][i]['text'] for q in examples['question']]
+        for label in ['A', 'B', 'C']: texts[label] = [p for p in examples['text']]
         def convert(c):
             if c == 'A': return 0
             elif c == 'B': return 1
@@ -328,7 +328,7 @@ def main():
         tokenized_examples, tokenized_option = {}, {}
         for label in ['A', 'B', 'C']:
             tokenized_examples[label] = tokenizer(
-                texts,
+                texts[label],
                 max_length=args.max_length,
                 truncation=True,
                 stride=args.doc_stride,
@@ -345,7 +345,6 @@ def main():
             sample_mapping = tokenized_examples[label].pop("overflow_to_sample_mapping")
             option_len = len(tokenized_option[label]['input_ids'][0])
             tokenized_option[label]['input_ids'][0][0] = 102 # 102 [SEP]
-            option_token_type_ids = [1]*(option_len-1)
             sample_mapping.append(-1)
             for i,sample_id in enumerate(sample_mapping):
                 
@@ -354,7 +353,6 @@ def main():
                     tokenized_examples[label]['input_ids'][i].extend(tokenized_option[label]['input_ids'][sample_id])
                     tokenized_examples[label]['token_type_ids'][i] = tokenized_examples[label]['token_type_ids'][i][:-option_len+1]
                     for _ in range(option_len-1): tokenized_examples[label]['token_type_ids'][i].append(1)
-                    # tokenized_examples[label]['token_type_ids'][i].extend([1]*(option_len-1))
 
                 else:
                     paragraph_len = len(tokenized_examples[label]['input_ids'][i])
@@ -364,14 +362,12 @@ def main():
                         tokenized_examples[label]['input_ids'][i].extend(tokenized_option[label]['input_ids'][sample_id])
                         tokenized_examples[label]['token_type_ids'][i] = tokenized_examples[label]['token_type_ids'][i][:-overflow_len]
                         for _ in range(option_len-1): tokenized_examples[label]['token_type_ids'][i].append(1)
-                        # tokenized_examples[label]['token_type_ids'][i].extend([1]*(option_len-1))
                         tokenized_examples[label]['attention_mask'][i] = tokenized_examples[label]['attention_mask'][i][:-overflow_len-1]
                         tokenized_examples[label]['attention_mask'][i].extend(tokenized_option[label]['attention_mask'][sample_id])
                     else:
                         tokenized_examples[label]['input_ids'][i].pop(-1)
                         tokenized_examples[label]['input_ids'][i].extend(tokenized_option[label]['input_ids'][sample_id])
                         for _ in range(option_len-1): tokenized_examples[label]['token_type_ids'][i].append(1)
-                        # tokenized_examples[label]['token_type_ids'][i].extend([1]*(option_len-1))
                         tokenized_examples[label]['attention_mask'][i].pop(-1)
                         tokenized_examples[label]['attention_mask'][i].extend(tokenized_option[label]['attention_mask'][sample_id])
 
@@ -380,8 +376,6 @@ def main():
                     else:
                         option_len = len(tokenized_option[label]['input_ids'][sample_id+1])
                         tokenized_option[label]['input_ids'][sample_id+1][0] = 102
-                        option_token_type_ids = [1]*(option_len-1)
-                        pass
             sample_mapping.pop(-1)
                 
         keys = tokenized_examples['A'].keys()
@@ -397,26 +391,41 @@ def main():
             tokenized_inputs['labels'].append(answers[sample_index])
         return tokenized_inputs
 
-    processed_datasets = raw_datasets.map(
-        preprocess_function, batched=True, remove_columns=raw_datasets["train"].column_names
-    )
-    train_dataset = processed_datasets["train"]
-    eval_dataset = processed_datasets["validation"]
+    column_names=raw_datasets["train"].column_names
+    train_dataset, train_noaug_dataset, eval_dataset = raw_datasets['train'], raw_datasets['train_eval'], raw_datasets['validation']
+    train_dataset = train_dataset.map(
+            preprocess_function,
+            batched=True,
+            num_proc=4,
+            remove_columns=column_names,
+        )
+    train_noaug_dataset = train_noaug_dataset.map(
+            preprocess_function,
+            batched=True,
+            num_proc=4,
+            remove_columns=column_names,
+        )
+    eval_dataset = eval_dataset.map(
+            preprocess_function,
+            batched=True,
+            num_proc=4,
+            remove_columns=column_names,
+        )
+    
     # Log a few random samples from the training set:
     # for index in random.sample(range(len(train_dataset)), 3):
     #     logger.info(f"Sample {index} of the training set: {train_dataset[index]}.")
 
-    # DataLoaders creation:
-    # `DataCollatorWithPadding` will apply dynamic padding for us (by padding to the maximum length of
-    # the samples passed). When using mixed precision, we add `pad_to_multiple_of=8` to pad all tensors to multiple
-    # of 8s, which will enable the use of Tensor Cores on NVIDIA hardware with compute capability >= 7.5 (Volta).
     data_collator = DataCollatorForMultipleChoice(tokenizer, pad_to_multiple_of=None)
 
     train_dataloader = DataLoader(
         train_dataset, shuffle=True, collate_fn=data_collator, batch_size=args.per_device_train_batch_size
     )
+    train_noaug_dataloader = DataLoader(train_noaug_dataset, collate_fn=data_collator, batch_size=args.per_device_eval_batch_size)
     eval_dataloader = DataLoader(eval_dataset, collate_fn=data_collator, batch_size=args.per_device_eval_batch_size)
-    
+    num_train_batch = len(train_dataloader)
+    num_train_noaug_batch = len(train_noaug_dataloader)
+    num_eval_batch = len(eval_dataloader)
     # Optimizer
     # Split weights in two groups, one with weight decay and the other not.
     no_decay = ["bias", "LayerNorm.weight"]
@@ -432,13 +441,7 @@ def main():
     ]
     optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate)
 
-    # Use the device given by the `accelerator` object.
     model.cuda()
-
-    # Prepare everything with our `accelerator`.
-
-    # Note -> the training dataloader needs to be prepared before we grab his length below (cause its length will be
-    # shorter in multiprocess)
 
     # Scheduler and math around the number of training steps.
     num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
@@ -468,11 +471,11 @@ def main():
     logger.info(f"  Gradient Accumulation steps = {args.gradient_accumulation_steps}")
     logger.info(f"  Total optimization steps = {args.max_train_steps}")
     # Only show the progress bar once on each machine.
-    progress_bar = tqdm(range(args.max_train_steps))
-    completed_steps = 0
-
+    softmax = nn.Softmax(dim=1)
     for epoch in range(args.num_train_epochs):
+        epoch_start_time = time.time()
         model.train()
+        train_loss = 0
         for step, batch in enumerate(train_dataloader):
             example_ids = batch.pop('example_id').tolist()
             for i in batch.keys():
@@ -481,31 +484,63 @@ def main():
             loss = outputs.loss
             loss = loss / args.gradient_accumulation_steps
             loss.backward()
-            if step % args.gradient_accumulation_steps == 0 or step == len(train_dataloader) - 1:
+            train_loss += loss.item()
+            if (step+1) % args.gradient_accumulation_steps == 0 or (step+1) == len(train_dataloader):
                 optimizer.step()
-                lr_scheduler.step()
                 optimizer.zero_grad()
-                progress_bar.update(1)
-                completed_steps += 1
+            print(f'training [{step:3d}/{num_train_batch}]',end='\r')
+        train_loss /= num_train_batch
 
-            if completed_steps >= args.max_train_steps:
-                break
-        exit()
+        
         model.eval()
+        y_preds = np.zeros((num_train_samples+1,3))
+        y_trues = np.zeros(num_train_samples+1)
+        for step, batch in enumerate(train_noaug_dataloader):
+            with torch.no_grad():
+                example_ids = batch.pop('example_id').tolist()
+                for i in batch.keys():
+                    batch[i] = batch[i].cuda()
+                outputs = model(**batch)
+                y_pred = softmax(outputs.logits).cpu().data.numpy()
+                y = batch['labels'].cpu().data.numpy()
+                for i, example_id in enumerate(example_ids):
+                    y_preds[example_id][0] += np.log(y_pred[i][0])
+                    y_preds[example_id][1] += np.log(y_pred[i][1])
+                    y_preds[example_id][2] += np.log(y_pred[i][2])
+                    y_trues[example_id] = y[i]
+            print(f'eval on train [{step:3d}/{num_train_noaug_batch}]',end='\r')
+        train_acc = (np.sum(np.argmax(y_preds, axis=1) == y_trues) - 1)/num_train_samples
+        
+        y_preds = np.zeros((num_eval_samples+1,3))
+        y_trues = np.zeros(num_eval_samples+1)
+        eval_loss = 0
         for step, batch in enumerate(eval_dataloader):
             with torch.no_grad():
+                example_ids = batch.pop('example_id').tolist()
+                for i in batch.keys():
+                    batch[i] = batch[i].cuda()
                 outputs = model(**batch)
-            predictions = outputs.logits.argmax(dim=-1)
-            metric.add_batch(
-                predictions=accelerator.gather(predictions),
-                references=accelerator.gather(batch["labels"]),
-            )
+                loss = outputs.loss
+                eval_loss += loss.item()
+                y_pred = softmax(outputs.logits).cpu().data.numpy()
+                y = batch['labels'].cpu().data.numpy()
+                for i, example_id in enumerate(example_ids):
+                    y_preds[example_id][0] += np.log(y_pred[i][0])
+                    y_preds[example_id][1] += np.log(y_pred[i][1])
+                    y_preds[example_id][2] += np.log(y_pred[i][2])
+                    y_trues[example_id] = y[i]
+            print(f'eval on eval [{step:3d}/{num_eval_batch}]',end='\r')
+        eval_acc = (np.sum(np.argmax(y_preds, axis=1) == y_trues) - 1)/num_eval_samples
+        eval_loss /= num_eval_batch
 
-        eval_metric = metric.compute()
-        
-
-    if args.output_dir is not None:
-        pass
+        print(f'epoch [{epoch+1:02d}/{args.num_train_epochs:02d}]: {time.time()-epoch_start_time:.2f} sec(s)')
+        print(f'train loss: {train_loss:.4f}, train acc: {train_acc:.4f}')
+        print(f' eval loss: {eval_loss:.4f},  eval acc: {eval_acc:.4f}')
+        model.save_pretrained(args.save_model_dir)
    
 if __name__ == "__main__":
-    main()
+    args = parse_args()
+    if args.seed is not None:
+        set_seed(args.seed)
+        set_seeds(args.seed)
+    main(args)
