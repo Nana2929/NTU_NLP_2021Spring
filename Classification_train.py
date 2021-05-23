@@ -8,6 +8,7 @@ import os
 import numpy as np
 import pandas as pd 
 from transformers import AutoModel, BertTokenizerFast, AutoModelForSequenceClassification, BertConfig, DataCollatorWithPadding
+from transformers import AutoTokenizer
 from torch.utils.data import TensorDataset, DataLoader
 import random
 from transformers import AdamW, set_seed
@@ -16,6 +17,7 @@ import ipdb
 from utils import normalize_text
 from sklearn.metrics import roc_auc_score
 from scipy.special import softmax
+import wandb
 
 
 def set_seeds(seed):
@@ -61,13 +63,13 @@ def parse_args():
     parser.add_argument(
         "--per_device_train_batch_size",
         type=int,
-        default=12,
+        default=6,
         help="Batch size (per device) for the training dataloader.",
     )
     parser.add_argument(
         "--per_device_eval_batch_size",
         type=int,
-        default=8,
+        default=6,
         help="Batch size (per device) for the evaluation dataloader.",
     )
     parser.add_argument(
@@ -76,7 +78,7 @@ def parse_args():
         default=5e-5,
         help="Initial learning rate (after the potential warmup period) to use.",
     )
-    parser.add_argument("--weight_decay", type=float, default=5e-7, help="Weight decay to use.")
+    parser.add_argument("--weight_decay", type=float, default=5e-6, help="Weight decay to use.")
     parser.add_argument("--num_train_epochs", type=int, default=10, help="Total number of training epochs to perform.")
     parser.add_argument(
         "--max_train_steps",
@@ -113,6 +115,12 @@ def parse_args():
         action="store_true",
         help="Training with full training data.",
     )
+    parser.add_argument(
+        "--dropout",
+        type=float,
+        default=0.1,
+        help="Dropout probability to apply.",
+    )
     args = parser.parse_args()
 
     if args.save_model_dir is not None:
@@ -121,6 +129,16 @@ def parse_args():
 
 
 def main(args):
+    wandb.init(project='ntu_nlp_risk', entity='pwlin')
+    config = wandb.config
+    config.learning_rate = args.learning_rate
+    config.weight_decay = args.weight_decay
+    config.dropout = args.dropout
+    config.model = args.model_name
+    config.batch_size = args.per_device_train_batch_size
+    config.device = args.device
+
+
     tokenizer = BertTokenizerFast.from_pretrained(args.tokenizer_name)
 
     def prepare_train_features(examples):
@@ -154,7 +172,7 @@ def main(args):
 
     raw_dataset = datasets.load_dataset("csv", data_files=args.train_file)
     train_dataset = raw_dataset['train'].map(normalize_text)
-    raw_dataset = raw_dataset['train'].train_test_split(test_size=0.1)
+    raw_dataset = raw_dataset['train'].train_test_split(test_size=0.03)
     # if args.debug:
     #     for split in raw_dataset.keys():
     #         raw_dataset[split] = raw_dataset[split].select(range(20))
@@ -187,6 +205,8 @@ def main(args):
     num_train_batch = len(train_dataloader)
     num_eval_batch = len(eval_dataloader)
     model = AutoModelForSequenceClassification.from_pretrained(args.model_name, num_labels=2).to(args.device)
+    model.config.attention_probs_dropout_prob = args.dropout
+    model.config.hidden_dropout_prob = args.dropout
     no_decay = ["bias", "LayerNorm.weight"]
     optimizer_grouped_parameters = [
         {
@@ -198,9 +218,11 @@ def main(args):
             "weight_decay": 0.0,
         },
     ]
-    optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate)
+    #optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate)
+    optimizer = AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
     torch_softmax = nn.Softmax(dim=1)
     best_auroc = float('-inf')
+    wandb.watch(model)
     for epoch in range(args.num_train_epochs):
         epoch_start_time = time.time()
         model.train()
@@ -274,6 +296,13 @@ def main(args):
         print(f'epoch [{epoch+1:02d}/{args.num_train_epochs:02d}]: {time.time()-epoch_start_time:.2f} sec(s)')
         print(f'train loss: {train_loss:.4f}, train acc: {train_acc:.4f}')
         print(f' eval loss: {eval_loss:.4f},  eval acc: {eval_acc:.4f}, eval auroc: {eval_auroc:.4f}')
+        wandb.log({
+            "train loss": train_loss,
+            "train acc": train_acc,
+            "eval loss": eval_loss,
+            "eval acc": eval_acc,
+            "eval auroc": eval_auroc
+        })
         
         if eval_auroc > best_auroc:
             best_auroc = eval_auroc
