@@ -45,12 +45,12 @@ def normalize_qa(example):
     example['answer'] = normalize_string(example['answer'].strip(), to_lower = False)
     return example 
 
-import json
-with open('./Train_qa_ans_.json', newline='') as jsonfile:
-    data = json.load(jsonfile) 
-print(*data[0], sep = '\n')
-print(data[0]['question']['choices'])
-print(normalize_qa(data[0]))
+# import json
+# with open('./Train_qa_ans_.json', newline='') as jsonfile:
+#     data = json.load(jsonfile) 
+# print(*data[0], sep = '\n')
+# print(data[0]['question']['choices'])
+# print(normalize_qa(data[0]))
 
 # if __name__ == '__main__':
 #     main()

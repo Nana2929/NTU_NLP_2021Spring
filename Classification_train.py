@@ -33,13 +33,13 @@ def set_seeds(seed):
 def parse_args():
     parser = argparse.ArgumentParser(description="Finetune a transformers model on a Classification task")
     parser.add_argument(
-        "--train_file", type=str, default='./data/Train_risk_classification_ans.csv', help="A json file containing the training data."
+        "--train_file", type=str, default='./data/Train_risk_classification_ans.csv', help="A file containing the training data."
     )
     parser.add_argument(
-        "--eval_file", type=str, default='./data/Develop_risk_classification.csv', help="A json file containing the training data."
+        "--eval_file", type=str, default='./data/Develop_risk_classification.csv', help="A file containing the eval data."
     )
     parser.add_argument(
-        "--preprocessing_num_workers", type=int, default=4, help="A csv or a json file containing the training data."
+        "--preprocessing_num_workers", type=int, default=4, help="Preproc num workers"
     )
     parser.add_argument(
         "--max_seq_length",
