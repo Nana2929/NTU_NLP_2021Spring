@@ -28,7 +28,7 @@ def RemoveDummies(string):
     eg. ['個', '管師', '：', '這', '個', '月', '還好', '嗎', '？', '民眾', '：', '蛤', '？']
     output: a segmented sentence in list form 
     '''
-    Dummies = ['這樣','就','還是']
+    Dummies = ['就','恩', '喔']
     new_string = []
     for s in string:
         if s not in Dummies:
