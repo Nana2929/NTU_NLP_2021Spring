@@ -1,4 +1,4 @@
-import ipdb
+# import ipdb
 
 def normalize_text(example):
     """把classifcation example全形轉半形"""
@@ -38,13 +38,14 @@ def normalize_qa(example):
     proced = []
     for i, choice in enumerate(example['question']['choices']):
         choice['text'] = normalize_string(choice['text'])
-        choice['label'] = normalize_string(choice['label'].strip(), to_lower = False)
+        choice['label'] = choice['label'].strip()
+        choice['label'] = normalize_string(choice['label'], to_lower = False)
         proced.append(choice)
     assert len(proced) == 3
     example['question']['choices'] = proced
-    example['answer'] = normalize_string(example['answer'].strip(), to_lower = False)
+    example['answer'] = example['answer'].strip()
+    example['answer'] = normalize_string(example['answer'], to_lower = False)
     return example 
-
 # import json
 # with open('./Train_qa_ans_.json', newline='') as jsonfile:
 #     data = json.load(jsonfile) 
