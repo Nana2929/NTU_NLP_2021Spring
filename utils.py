@@ -1,11 +1,8 @@
-# -*- coding:utf-8 -*-
 # import ipdb
-import re
-import pandas as pd
-def normalize_text(example, rep_speaker=False):
+
+def normalize_text(example):
     """把classifcation example全形轉半形"""
     """Lowercase all the text"""
-    # 家屬：醫師：民眾：個管師：
     example['text'] = example['text'].replace("。", ".").replace("、", ',')
     rstring = ""
     for uchar in example['text']:
@@ -16,9 +13,6 @@ def normalize_text(example, rep_speaker=False):
             u_code -= 65248
         rstring += chr(u_code)
     example['text'] = rstring.lower()
-    if rep_speaker:
-        example['text'] = re.sub(r'醫師:|個管師:', '[S1]:', example['text'])
-        example['text'] = re.sub(r'家屬:|民眾:', '[S2]:', example['text'])
     return example
 
 def normalize_string(s, to_lower = True):
@@ -34,47 +28,30 @@ def normalize_string(s, to_lower = True):
             u_code -= 65248
         rstring += chr(u_code)
     if to_lower:
-        rstring = rstring.lower()
-    return rstring
+        s = rstring.lower()
+    return s
 
-def normalize_qa(example, rep_speaker=False):
+def normalize_qa(example):
     '''normalize qa file w.r.t. its format'''
-    # text 
     example['text'] = normalize_string(example['text'])
-    if rep_speaker:
-        example['text'] = re.sub(r'醫師:|個管師:', '[S1]:', example['text'])
-        example['text'] = re.sub(r'家屬:|民眾:', '[S2]:', example['text'])
-
-    # question stem 
     example['question']['stem'] = normalize_string(example['question']['stem'])
-    if rep_speaker:
-        example['question']['stem']= re.sub(r'醫師|個管師', '[S1]', example['question']['stem'])
-        example['question']['stem']= re.sub(r'家屬|民眾', '[S2]', example['question']['stem'])
-    
-    # question texts 
     proced = []
     for i, choice in enumerate(example['question']['choices']):
         choice['text'] = normalize_string(choice['text'])
-        if rep_speaker:
-            choice['text']= re.sub(r'醫師|個管師', '[S1]', choice['text'])
-            choice['text']= re.sub(r'家屬|民眾', '[S2]', choice['text'])
         choice['label'] = choice['label'].strip()
         choice['label'] = normalize_string(choice['label'], to_lower = False)
         proced.append(choice)
-        assert choice['label'] in ['A', 'B', 'C']
     assert len(proced) == 3
     example['question']['choices'] = proced
     example['answer'] = example['answer'].strip()
     example['answer'] = normalize_string(example['answer'], to_lower = False)
     return example 
-
-# df =pd.read_csv('risk_cls/Train_risk_classification_ans.csv')
-# data = df.to_dict(orient='records')
-# # print(*data)
-# for i, example in enumerate(data):
-#     data[i] = normalize_text(example, rep_speaker = True)
-# print(data[-1])
-
+# import json
+# with open('./Train_qa_ans_.json', newline='') as jsonfile:
+#     data = json.load(jsonfile) 
+# print(*data[0], sep = '\n')
+# print(data[0]['question']['choices'])
+# print(normalize_qa(data[0]))
 
 # if __name__ == '__main__':
 #     main()
