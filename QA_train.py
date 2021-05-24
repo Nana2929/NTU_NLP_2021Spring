@@ -18,7 +18,6 @@ Fine-tuning a huggingface Transformers model on multiple choice relying on the a
 import argparse
 import logging
 import math
-import json
 import os
 import numpy as np
 import random
@@ -53,6 +52,7 @@ from transformers import (
 )
 from transformers.file_utils import PaddingStrategy
 from tqdm.auto import tqdm
+from collections import Counter
 
 
 logger = logging.getLogger(__name__)
@@ -78,7 +78,7 @@ def parse_args():
         "--train_file", type=str, default='./data/Train_qa_ans.json', help="A json file containing the training data."
     )
     parser.add_argument(
-        "--validation_file", type=str, default='./data/SampleData_QA.json', help="A json file containing the validation data."
+        "--validation_file", type=str, default='./data/clean_qa.json', help="A json file containing the validation data."
     )
     parser.add_argument(
         "--max_length",
@@ -109,7 +109,7 @@ def parse_args():
     parser.add_argument(
         "--doc_stride",
         type=int,
-        default=200,
+        default=100,
         help="When splitting up a long document into chunks how much stride to take between chunks.",
     )
     parser.add_argument(
@@ -141,8 +141,8 @@ def parse_args():
         default=5e-5,
         help="Initial learning rate (after the potential warmup period) to use.",
     )
-    parser.add_argument("--weight_decay", type=float, default=0.0, help="Weight decay to use.")
-    parser.add_argument("--num_train_epochs", type=int, default=3, help="Total number of training epochs to perform.")
+    parser.add_argument("--weight_decay", type=float, default=0, help="Weight decay to use.")
+    parser.add_argument("--num_train_epochs", type=int, default=10, help="Total number of training epochs to perform.")
     parser.add_argument(
         "--max_train_steps",
         type=int,
@@ -166,7 +166,7 @@ def parse_args():
         "--num_warmup_steps", type=int, default=0, help="Number of steps for the warmup in the lr scheduler."
     )
     parser.add_argument("--save_model_dir", type=str, default='./MCQ_model', help="Where to store the final model.")
-    parser.add_argument("--seed", type=int, default=None, help="A seed for reproducible training.")
+    parser.add_argument("--seed", type=int, default=178, help="A seed for reproducible training.")
     parser.add_argument(
         "--model_type",
         type=str,
@@ -177,6 +177,12 @@ def parse_args():
         "--debug",
         action="store_true",
         help="Activate debug mode and run training only with a subset of data.",
+    )
+    parser.add_argument(
+        "--dropout",
+        type=float,
+        default=0.95,
+        help="Dropout probability to apply.",
     )
     args = parser.parse_args()
     if args.save_model_dir is not None:
@@ -258,62 +264,106 @@ def main(args):
     datasets.utils.logging.set_verbosity_error()
     transformers.utils.logging.set_verbosity_error()
 
-
-    # In distributed training, the load_dataset function guarantee that only one local process can concurrently
-    # download the dataset.
-
     data_files = {}
-    if args.train_file is not None:
-        data_files["train"] = args.train_file
-        data_files["train_eval"] = args.train_file
-    if args.validation_file is not None:
-        data_files["validation"] = args.validation_file
+    data_files["train"] = args.train_file
+    data_files["train_eval"] = args.train_file
+    data_files["validation"] = args.validation_file
     extension = args.dataset_script
     raw_datasets = load_dataset(extension, data_files=data_files)
-    # Trim a number of training examples
     num_train_samples = len(raw_datasets['train'])
     num_eval_samples = len(raw_datasets['validation'])
     if args.debug:
         for split in raw_datasets.keys():
-            raw_datasets[split] = raw_datasets[split].select(range(10))
+            raw_datasets[split] = raw_datasets[split].select(range(300))
     
-    if args.model_name_or_path:
-        config = AutoConfig.from_pretrained(args.model_name_or_path)
-    else:
-        config = CONFIG_MAPPING[args.model_type]()
-        logger.warning("You are instantiating a new config instance from scratch.")
-
-    if args.tokenizer_name:
-        tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_name, use_fast=not args.use_slow_tokenizer)
-        tokenizer = BertTokenizerFast.from_pretrained(args.tokenizer_name)
-    elif args.model_name_or_path:
-        tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path, use_fast=not args.use_slow_tokenizer)
-    else:
-        raise ValueError(
-            "You are instantiating a new tokenizer from scratch. This is not supported by this script."
-            "You can do it from another script, save it, and load it from here, using --tokenizer_name."
-        )
-
-    if args.model_name_or_path:
-        model = AutoModelForMultipleChoice.from_pretrained(
-            args.model_name_or_path,
-            from_tf=bool(".ckpt" in args.model_name_or_path),
-            config=config,
-        )
-    else:
-        logger.info("Training new model from scratch")
-        model = AutoModelForMultipleChoice.from_config(config)
-
-    model.resize_token_embeddings(len(tokenizer))
+    # tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_name, use_fast=not args.use_slow_tokenizer)
+    tokenizer = BertTokenizerFast.from_pretrained(args.tokenizer_name)
+    model = AutoModelForMultipleChoice.from_pretrained(args.model_name_or_path)
+    # model.config.attention_probs_dropout_prob = args.dropout
+    # model.config.hidden_dropout_prob = args.dropout
+    # model.config.classifier_dropout_prob = 0.5
+    # model.resize_token_embeddings(len(tokenizer))
     
     # Preprocessing the datasets.
     # First we tokenize all the texts.
     def preprocess_function(examples):
         option, texts = {}, {}
-        # option['A'] = [q['stem']+q['choices'][0]['text'] for q in examples['question']] 
-        # option['B'] = [q['stem']+q['choices'][1]['text'] for q in examples['question']] 
-        # option['C'] = [q['stem']+q['choices'][2]['text'] for q in examples['question']]
-        # option[label] = [q['stem']+q['choices'][i]['text'] for q in examples['question']]
+        for i,label in enumerate(['A', 'B', 'C']): option[label] = [q['stem']+q['choices'][i]['text'] for q in examples['question']]
+        for label in ['A', 'B', 'C']: texts[label] = [p for p in examples['text']]
+        def convert(c):
+            if c == 'A': return 0
+            elif c == 'B': return 1
+            elif c == 'C': return 2
+            else: 
+                print(f'Invalid label "{c}"')
+                exit()
+
+        answers = list(map(convert, examples['answer']))
+        tokenized_examples, tokenized_option = {}, {}
+        for label in ['A', 'B', 'C']:
+            tokenized_examples[label] = tokenizer(
+                texts[label],
+                max_length=args.max_length,
+                truncation=True,
+                stride=args.doc_stride,
+                return_overflowing_tokens=True,
+                padding = False,
+            )
+            tokenized_option[label] = tokenizer(
+                option[label],
+                stride=args.doc_stride,
+                return_overflowing_tokens=True,
+                padding = False,
+            )
+        for label in ['A', 'B', 'C']:
+            sample_mapping = tokenized_examples[label].pop("overflow_to_sample_mapping")
+            option_len = len(tokenized_option[label]['input_ids'][0])
+            tokenized_option[label]['input_ids'][0][0] = 102 # 102 [SEP]
+            sample_mapping.append(-1)
+            for i,sample_id in enumerate(sample_mapping):        
+                if sample_id == sample_mapping[i+1]:
+                    tokenized_examples[label]['input_ids'][i] = tokenized_examples[label]['input_ids'][i][:-option_len]
+                    tokenized_examples[label]['input_ids'][i].extend(tokenized_option[label]['input_ids'][sample_id])
+                    tokenized_examples[label]['token_type_ids'][i] = tokenized_examples[label]['token_type_ids'][i][:-option_len+1]
+                    for _ in range(option_len-1): tokenized_examples[label]['token_type_ids'][i].append(1)
+                else:
+                    paragraph_len = len(tokenized_examples[label]['input_ids'][i])
+                    overflow_len = paragraph_len + option_len - 1 - args.max_length
+                    if overflow_len > 0:    
+                        tokenized_examples[label]['input_ids'][i] = tokenized_examples[label]['input_ids'][i][:-overflow_len-1]
+                        tokenized_examples[label]['input_ids'][i].extend(tokenized_option[label]['input_ids'][sample_id])
+                        tokenized_examples[label]['token_type_ids'][i] = tokenized_examples[label]['token_type_ids'][i][:-overflow_len]
+                        for _ in range(option_len-1): tokenized_examples[label]['token_type_ids'][i].append(1)
+                        tokenized_examples[label]['attention_mask'][i] = tokenized_examples[label]['attention_mask'][i][:-overflow_len-1]
+                        tokenized_examples[label]['attention_mask'][i].extend(tokenized_option[label]['attention_mask'][sample_id])
+                    else:
+                        tokenized_examples[label]['input_ids'][i].pop(-1)
+                        tokenized_examples[label]['input_ids'][i].extend(tokenized_option[label]['input_ids'][sample_id])
+                        for _ in range(option_len-1): tokenized_examples[label]['token_type_ids'][i].append(1)
+                        tokenized_examples[label]['attention_mask'][i].pop(-1)
+                        tokenized_examples[label]['attention_mask'][i].extend(tokenized_option[label]['attention_mask'][sample_id])
+                    if sample_mapping[i+1] == -1:
+                        break
+                    else:
+                        option_len = len(tokenized_option[label]['input_ids'][sample_id+1])
+                        tokenized_option[label]['input_ids'][sample_id+1][0] = 102
+            sample_mapping.pop(-1)
+                
+        keys = tokenized_examples['A'].keys()
+        tokenized_inputs = {k:[[tokenized_examples['A'][k][i],
+                                tokenized_examples['B'][k][i],
+                                tokenized_examples['C'][k][i]] for i in range(len(sample_mapping))] for k in keys}
+        tokenized_inputs["labels"] = [] # 0 or 1 
+        tokenized_inputs["example_id"] = []
+        for sample_index in sample_mapping:
+            # Grab the sequence corresponding to that example (to know what is the context and what is the question).
+            # One example can give several spans, this is the index of the example containing this span of text.
+            tokenized_inputs["example_id"].append(examples["id"][sample_index])
+            tokenized_inputs['labels'].append(answers[sample_index])
+        return tokenized_inputs
+
+    def preprocess_augument_function(examples):
+        option, texts = {}, {}
         for i,label in enumerate(['A', 'B', 'C']): option[label] = [q['stem']+q['choices'][i]['text'] for q in examples['question']]
         for label in ['A', 'B', 'C']: texts[label] = [p for p in examples['text']]
         def convert(c):
@@ -347,13 +397,11 @@ def main(args):
             tokenized_option[label]['input_ids'][0][0] = 102 # 102 [SEP]
             sample_mapping.append(-1)
             for i,sample_id in enumerate(sample_mapping):
-                
                 if sample_id == sample_mapping[i+1]:
                     tokenized_examples[label]['input_ids'][i] = tokenized_examples[label]['input_ids'][i][:-option_len]
                     tokenized_examples[label]['input_ids'][i].extend(tokenized_option[label]['input_ids'][sample_id])
                     tokenized_examples[label]['token_type_ids'][i] = tokenized_examples[label]['token_type_ids'][i][:-option_len+1]
                     for _ in range(option_len-1): tokenized_examples[label]['token_type_ids'][i].append(1)
-
                 else:
                     paragraph_len = len(tokenized_examples[label]['input_ids'][i])
                     overflow_len = paragraph_len + option_len - 1 - args.max_length
@@ -370,14 +418,12 @@ def main(args):
                         for _ in range(option_len-1): tokenized_examples[label]['token_type_ids'][i].append(1)
                         tokenized_examples[label]['attention_mask'][i].pop(-1)
                         tokenized_examples[label]['attention_mask'][i].extend(tokenized_option[label]['attention_mask'][sample_id])
-
                     if sample_mapping[i+1] == -1:
                         break
                     else:
                         option_len = len(tokenized_option[label]['input_ids'][sample_id+1])
                         tokenized_option[label]['input_ids'][sample_id+1][0] = 102
             sample_mapping.pop(-1)
-                
         keys = tokenized_examples['A'].keys()
         tokenized_inputs = {k:[[tokenized_examples['A'][k][i],
                                 tokenized_examples['B'][k][i],
@@ -389,14 +435,29 @@ def main(args):
             # One example can give several spans, this is the index of the example containing this span of text.
             tokenized_inputs["example_id"].append(examples["id"][sample_index])
             tokenized_inputs['labels'].append(answers[sample_index])
+        
+        inverted_file = {}
+        for i,example_id in enumerate(sample_mapping):
+            if example_id in inverted_file: inverted_file[example_id].append(i)
+            else: inverted_file[example_id] = [i]
+        for _ in range(2):
+            for i in range(len(inverted_file)):
+                a,b,c = np.random.choice(inverted_file[i],3)
+                for k in keys:
+                    tokenized_inputs[k].append([tokenized_examples['A'][k][a],
+                                                tokenized_examples['B'][k][b],
+                                                tokenized_examples['C'][k][c]])
+                tokenized_inputs['labels'].append(answers[i])
+                tokenized_inputs["example_id"].append(examples["id"][i])
+        
         return tokenized_inputs
 
     column_names=raw_datasets["train"].column_names
     train_dataset, train_noaug_dataset, eval_dataset = raw_datasets['train'], raw_datasets['train_eval'], raw_datasets['validation']
     train_dataset = train_dataset.map(
-            preprocess_function,
+            preprocess_augument_function,
             batched=True,
-            num_proc=4,
+            num_proc=1,
             remove_columns=column_names,
         )
     train_noaug_dataset = train_noaug_dataset.map(
@@ -457,8 +518,6 @@ def main(args):
         num_training_steps=args.max_train_steps,
     )
 
-    # Metrics
-    metric = load_metric("accuracy")
 
     # Train!
     total_batch_size = args.per_device_train_batch_size * args.gradient_accumulation_steps
@@ -477,7 +536,7 @@ def main(args):
         model.train()
         train_loss = 0
         for step, batch in enumerate(train_dataloader):
-            example_ids = batch.pop('example_id').tolist()
+            batch.pop('example_id')
             for i in batch.keys():
                 batch[i] = batch[i].cuda()
             outputs = model(**batch)
@@ -488,7 +547,7 @@ def main(args):
             if (step+1) % args.gradient_accumulation_steps == 0 or (step+1) == len(train_dataloader):
                 optimizer.step()
                 optimizer.zero_grad()
-            print(f'training [{step:3d}/{num_train_batch}]',end='\r')
+            print(f'training [{step:3d}/{num_train_batch}] loss: {loss.item():.5f}',end='\r')
         train_loss /= num_train_batch
 
         
