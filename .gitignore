@@ -3,7 +3,7 @@ __pycache__/
 
 # Datas
 data/
-*model/
+*model*/
 
 
 # Files
