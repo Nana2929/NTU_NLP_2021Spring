@@ -65,6 +65,9 @@ def normalize_qa(example, rep_speaker=False):
     example['question']['choices'] = proced
     example['answer'] = example['answer'].strip()
     example['answer'] = normalize_string(example['answer'], to_lower = False)
+    if example['answer'] not in ['A', 'B', 'C']:
+        example['answer'] = 'C' #菜花
+        
     return example 
 # df =pd.read_csv('risk_cls/Train_risk_classification_ans.csv')
 # data = df.to_dict(orient='records')
