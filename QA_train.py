@@ -24,6 +24,9 @@ import random
 from dataclasses import dataclass
 from typing import Optional, Union
 
+from numpy.lib.function_base import select
+from rank_bm25 import BM25Okapi
+
 import datasets
 import torch
 import torch.nn as nn
@@ -138,11 +141,11 @@ def parse_args():
     parser.add_argument(
         "--learning_rate",
         type=float,
-        default=5e-5,
+        default=1e-5,
         help="Initial learning rate (after the potential warmup period) to use.",
     )
-    parser.add_argument("--weight_decay", type=float, default=0, help="Weight decay to use.")
-    parser.add_argument("--num_train_epochs", type=int, default=10, help="Total number of training epochs to perform.")
+    parser.add_argument("--weight_decay", type=float, default=5e-3, help="Weight decay to use.")
+    parser.add_argument("--num_train_epochs", type=int, default=4, help="Total number of training epochs to perform.")
     parser.add_argument(
         "--max_train_steps",
         type=int,
@@ -166,7 +169,7 @@ def parse_args():
         "--num_warmup_steps", type=int, default=0, help="Number of steps for the warmup in the lr scheduler."
     )
     parser.add_argument("--save_model_dir", type=str, default='./MCQ_model', help="Where to store the final model.")
-    parser.add_argument("--seed", type=int, default=178, help="A seed for reproducible training.")
+    parser.add_argument("--seed", type=int, default=1, help="A seed for reproducible training.")
     parser.add_argument(
         "--model_type",
         type=str,
@@ -279,10 +282,10 @@ def main(args):
     # tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_name, use_fast=not args.use_slow_tokenizer)
     tokenizer = BertTokenizerFast.from_pretrained(args.tokenizer_name)
     model = AutoModelForMultipleChoice.from_pretrained(args.model_name_or_path)
-    # model.config.attention_probs_dropout_prob = args.dropout
-    # model.config.hidden_dropout_prob = args.dropout
-    # model.config.classifier_dropout_prob = 0.5
-    # model.resize_token_embeddings(len(tokenizer))
+    model.config.attention_probs_dropout_prob = args.dropout
+    model.config.hidden_dropout_prob = args.dropout
+    model.config.classifier_dropout_prob = 0.5
+    model.resize_token_embeddings(len(tokenizer))
     
     # Preprocessing the datasets.
     # First we tokenize all the texts.
@@ -303,24 +306,41 @@ def main(args):
         for label in ['A', 'B', 'C']:
             tokenized_examples[label] = tokenizer(
                 texts[label],
-                max_length=args.max_length,
-                truncation=True,
-                stride=args.doc_stride,
+                max_length = args.max_length,
+                truncation = True,
+                stride = args.doc_stride,
                 return_overflowing_tokens=True,
                 padding = False,
             )
             tokenized_option[label] = tokenizer(
                 option[label],
-                stride=args.doc_stride,
-                return_overflowing_tokens=True,
+                stride = args.doc_stride,
+                return_overflowing_tokens = True,
                 padding = False,
             )
+        sample_mapping = tokenized_examples['A']["overflow_to_sample_mapping"]
+        inverted_file = {}
+        for i,example_id in enumerate(sample_mapping):
+            if example_id in inverted_file: inverted_file[example_id].append(i)
+            else: inverted_file[example_id] = [i]
+        for i in range(len(inverted_file)):
+            passage_count = len(inverted_file[i])
+            if passage_count > 4:
+                tokenized_corpus = [tokenized_examples['A']['input_ids'][j] for j in inverted_file[i]]
+                bm25 = BM25Okapi(tokenized_corpus)
+                tokenized_query = [tokenized_option[j]['input_ids'][i] for j in ['A', 'B', 'C']]
+                tokenized_query = [t for option in tokenized_query for t in option]
+                doc_scores = bm25.get_scores(tokenized_query)
+                reduce_count = int(passage_count * 0.8)
+                _, inverted_file[i] = map(list, zip(*sorted(zip(doc_scores, inverted_file[i]),reverse=True)))
+                inverted_file[i] = inverted_file[i][:reduce_count]
+        selected_passages = sorted([i for _,lst in inverted_file.items() for i in lst])
         for label in ['A', 'B', 'C']:
             sample_mapping = tokenized_examples[label].pop("overflow_to_sample_mapping")
             option_len = len(tokenized_option[label]['input_ids'][0])
             tokenized_option[label]['input_ids'][0][0] = 102 # 102 [SEP]
             sample_mapping.append(-1)
-            for i,sample_id in enumerate(sample_mapping):        
+            for i,sample_id in enumerate(sample_mapping):      
                 if sample_id == sample_mapping[i+1]:
                     tokenized_examples[label]['input_ids'][i] = tokenized_examples[label]['input_ids'][i][:-option_len]
                     tokenized_examples[label]['input_ids'][i].extend(tokenized_option[label]['input_ids'][sample_id])
@@ -352,12 +372,16 @@ def main(args):
         keys = tokenized_examples['A'].keys()
         tokenized_inputs = {k:[[tokenized_examples['A'][k][i],
                                 tokenized_examples['B'][k][i],
-                                tokenized_examples['C'][k][i]] for i in range(len(sample_mapping))] for k in keys}
+                                tokenized_examples['C'][k][i]] for i in selected_passages] for k in keys}
+
+        # for k in keys:    
+        #     tokenized_inputs[k] = [tokenized_inputs[k][p] for p in ]
         tokenized_inputs["labels"] = [] # 0 or 1 
         tokenized_inputs["example_id"] = []
-        for sample_index in sample_mapping:
+        for i in selected_passages:
             # Grab the sequence corresponding to that example (to know what is the context and what is the question).
             # One example can give several spans, this is the index of the example containing this span of text.
+            sample_index = sample_mapping[i]
             tokenized_inputs["example_id"].append(examples["id"][sample_index])
             tokenized_inputs['labels'].append(answers[sample_index])
         return tokenized_inputs
@@ -391,6 +415,23 @@ def main(args):
                 return_overflowing_tokens=True,
                 padding = False,
             )
+        sample_mapping = tokenized_examples['A']["overflow_to_sample_mapping"]
+        inverted_file = {}
+        for i,example_id in enumerate(sample_mapping):
+            if example_id in inverted_file: inverted_file[example_id].append(i)
+            else: inverted_file[example_id] = [i]
+        for i in range(len(inverted_file)):
+            passage_count = len(inverted_file[i])
+            if passage_count > 4:
+                tokenized_corpus = [tokenized_examples['A']['input_ids'][j] for j in inverted_file[i]]
+                bm25 = BM25Okapi(tokenized_corpus)
+                tokenized_query = [tokenized_option[j]['input_ids'][i] for j in ['A', 'B', 'C']]
+                tokenized_query = [t for option in tokenized_query for t in option]
+                doc_scores = bm25.get_scores(tokenized_query)
+                reduce_count = int(passage_count * 0.6)
+                _, inverted_file[i] = map(list, zip(*sorted(zip(doc_scores, inverted_file[i]),reverse=True)))
+                inverted_file[i] = inverted_file[i][:reduce_count]
+        selected_passages = sorted([i for _,lst in inverted_file.items() for i in lst])
         for label in ['A', 'B', 'C']:
             sample_mapping = tokenized_examples[label].pop("overflow_to_sample_mapping")
             option_len = len(tokenized_option[label]['input_ids'][0])
@@ -427,19 +468,17 @@ def main(args):
         keys = tokenized_examples['A'].keys()
         tokenized_inputs = {k:[[tokenized_examples['A'][k][i],
                                 tokenized_examples['B'][k][i],
-                                tokenized_examples['C'][k][i]] for i in range(len(sample_mapping))] for k in keys}
+                                tokenized_examples['C'][k][i]] for i in selected_passages] for k in keys}
         tokenized_inputs["labels"] = [] # 0 or 1 
         tokenized_inputs["example_id"] = []
-        for sample_index in sample_mapping:
+        for i in selected_passages:
             # Grab the sequence corresponding to that example (to know what is the context and what is the question).
             # One example can give several spans, this is the index of the example containing this span of text.
+            sample_index = sample_mapping[i]
             tokenized_inputs["example_id"].append(examples["id"][sample_index])
             tokenized_inputs['labels'].append(answers[sample_index])
         
-        inverted_file = {}
-        for i,example_id in enumerate(sample_mapping):
-            if example_id in inverted_file: inverted_file[example_id].append(i)
-            else: inverted_file[example_id] = [i]
+
         for _ in range(2):
             for i in range(len(inverted_file)):
                 a,b,c = np.random.choice(inverted_file[i],3)
@@ -463,16 +502,17 @@ def main(args):
     train_noaug_dataset = train_noaug_dataset.map(
             preprocess_function,
             batched=True,
-            num_proc=4,
+            num_proc=1,
             remove_columns=column_names,
         )
     eval_dataset = eval_dataset.map(
             preprocess_function,
             batched=True,
-            num_proc=4,
+            num_proc=1,
             remove_columns=column_names,
         )
-    
+    # print('done')
+    # exit()
     # Log a few random samples from the training set:
     # for index in random.sample(range(len(train_dataset)), 3):
     #     logger.info(f"Sample {index} of the training set: {train_dataset[index]}.")

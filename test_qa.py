@@ -26,6 +26,7 @@ import numpy as np
 import random
 from dataclasses import dataclass
 from typing import Optional, Union
+from rank_bm25 import BM25Okapi
 
 import datasets
 import torch
@@ -261,13 +262,8 @@ def main(args):
     
     # Preprocessing the datasets.
     # First we tokenize all the texts.
-
     def preprocess_function(examples):
         option, texts = {}, {}
-        # option['A'] = [q['stem']+q['choices'][0]['text'] for q in examples['question']] 
-        # option['B'] = [q['stem']+q['choices'][1]['text'] for q in examples['question']] 
-        # option['C'] = [q['stem']+q['choices'][2]['text'] for q in examples['question']]
-        # option[label] = [q['stem']+q['choices'][i]['text'] for q in examples['question']]
         for i,label in enumerate(['A', 'B', 'C']): option[label] = [q['stem']+q['choices'][i]['text'] for q in examples['question']]
         for label in ['A', 'B', 'C']: texts[label] = [p for p in examples['text']]
         def convert(c):
@@ -282,31 +278,46 @@ def main(args):
         for label in ['A', 'B', 'C']:
             tokenized_examples[label] = tokenizer(
                 texts[label],
-                max_length=args.max_length,
-                truncation=True,
-                stride=args.doc_stride,
+                max_length = args.max_length,
+                truncation = True,
+                stride = args.doc_stride,
                 return_overflowing_tokens=True,
                 padding = False,
             )
             tokenized_option[label] = tokenizer(
                 option[label],
-                stride=args.doc_stride,
-                return_overflowing_tokens=True,
+                stride = args.doc_stride,
+                return_overflowing_tokens = True,
                 padding = False,
             )
+        sample_mapping = tokenized_examples['A']["overflow_to_sample_mapping"]
+        inverted_file = {}
+        for i,example_id in enumerate(sample_mapping):
+            if example_id in inverted_file: inverted_file[example_id].append(i)
+            else: inverted_file[example_id] = [i]
+        for i in range(len(inverted_file)):
+            passage_count = len(inverted_file[i])
+            if passage_count > 4:
+                tokenized_corpus = [tokenized_examples['A']['input_ids'][j] for j in inverted_file[i]]
+                bm25 = BM25Okapi(tokenized_corpus)
+                tokenized_query = [tokenized_option[j]['input_ids'][i] for j in ['A', 'B', 'C']]
+                tokenized_query = [t for option in tokenized_query for t in option]
+                doc_scores = bm25.get_scores(tokenized_query)
+                reduce_count = int(passage_count * 0.8)
+                _, inverted_file[i] = map(list, zip(*sorted(zip(doc_scores, inverted_file[i]),reverse=True)))
+                inverted_file[i] = inverted_file[i][:reduce_count]
+        selected_passages = sorted([i for _,lst in inverted_file.items() for i in lst])
         for label in ['A', 'B', 'C']:
             sample_mapping = tokenized_examples[label].pop("overflow_to_sample_mapping")
             option_len = len(tokenized_option[label]['input_ids'][0])
             tokenized_option[label]['input_ids'][0][0] = 102 # 102 [SEP]
             sample_mapping.append(-1)
-            for i,sample_id in enumerate(sample_mapping):
-                
+            for i,sample_id in enumerate(sample_mapping):      
                 if sample_id == sample_mapping[i+1]:
                     tokenized_examples[label]['input_ids'][i] = tokenized_examples[label]['input_ids'][i][:-option_len]
                     tokenized_examples[label]['input_ids'][i].extend(tokenized_option[label]['input_ids'][sample_id])
                     tokenized_examples[label]['token_type_ids'][i] = tokenized_examples[label]['token_type_ids'][i][:-option_len+1]
                     for _ in range(option_len-1): tokenized_examples[label]['token_type_ids'][i].append(1)
-
                 else:
                     paragraph_len = len(tokenized_examples[label]['input_ids'][i])
                     overflow_len = paragraph_len + option_len - 1 - args.max_length
@@ -323,7 +334,6 @@ def main(args):
                         for _ in range(option_len-1): tokenized_examples[label]['token_type_ids'][i].append(1)
                         tokenized_examples[label]['attention_mask'][i].pop(-1)
                         tokenized_examples[label]['attention_mask'][i].extend(tokenized_option[label]['attention_mask'][sample_id])
-
                     if sample_mapping[i+1] == -1:
                         break
                     else:
@@ -334,13 +344,19 @@ def main(args):
         keys = tokenized_examples['A'].keys()
         tokenized_inputs = {k:[[tokenized_examples['A'][k][i],
                                 tokenized_examples['B'][k][i],
-                                tokenized_examples['C'][k][i]] for i in range(len(sample_mapping))] for k in keys}
+                                tokenized_examples['C'][k][i]] for i in selected_passages] for k in keys}
+
+        # for k in keys:    
+        #     tokenized_inputs[k] = [tokenized_inputs[k][p] for p in ]
         tokenized_inputs["example_id"] = []
-        for sample_index in sample_mapping:
+        for i in selected_passages:
             # Grab the sequence corresponding to that example (to know what is the context and what is the question).
             # One example can give several spans, this is the index of the example containing this span of text.
+            sample_index = sample_mapping[i]
             tokenized_inputs["example_id"].append(examples["id"][sample_index])
         return tokenized_inputs
+
+    
 
     column_names=raw_datasets["validation"].column_names
     eval_dataset = raw_datasets['validation']
