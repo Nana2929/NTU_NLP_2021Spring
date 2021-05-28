@@ -293,9 +293,8 @@ def main(args):
     # Preprocessing the datasets.
     # First we tokenize all the texts.
     def preprocess_function(examples):
-        option, texts = {}, {}
-        for i,label in enumerate(['A', 'B', 'C']): option[label] = [q['stem']+q['choices'][i]['text'] for q in examples['question']]
-        for label in ['A', 'B', 'C']: texts[label] = [p for p in examples['text']]
+        # get texts, then map A, B, C
+        # examples: a dict of keys: answer, article_id, id, question, text
         def convert(c):
             if c == 'A': return 0
             elif c == 'B': return 1
@@ -303,30 +302,99 @@ def main(args):
             else: 
                 print(f'Invalid label "{c}"')
                 exit()
-
         answers = list(map(convert, examples['answer']))
-        tokenized_examples, tokenized_option = {}, {}
+        texts = [p for p in examples['text']]
+        qastrings = []
+        option = {}
+        for i,label in enumerate(['A', 'B', 'C']): 
+            option[label] = [q['stem']+q['choices'][i]['text'] for q in examples['question']]
+        for i in range(len(examples['answer'])):
+            # process 1 question at one time
+            answeridx = convert(examples['answer'][i]) # get 0, 1, 2 
+            # print(examples['answer'][i], answeridx)
+            qastring = examples['question'][i]['stem']+ examples['question'][i]['choices'][answeridx]['text'] # question stem + answer text
+            # texts = [p for p in examples['text']]
+            qastrings.append(qastring)
+        assert len(qastrings) == len(examples['answer'])
+        #  ＬＩＮＥ www.prep.gov ＵＳＥＲ EMAIL MAIL maybe HIV H high GAMEONE prepeat scruff ig chendawan hpv 
+        tokens_to_add = ["……", 'line', 'user', 'prep', 'hiv', 'email', 'prepeat', 'ig', 'hpv', 'maybe', 'ok', 'high', 'scruff']
+        tokenizer.add_tokens(tokens_to_add, special_tokens=True)
+        tokenized_examples = tokenizer(
+            texts,
+            max_length=args.max_length,
+            truncation=True,
+            stride= args.doc_stride,
+            return_overflowing_tokens=True,
+            padding = False,
+        )
+        print(*tokenized_examples)
+        sample_mapping = tokenized_examples["overflow_to_sample_mapping"]
+        to_remove = []
+        similarity_dict = {}
+        for i, encoded_passage in enumerate(tokenized_examples['input_ids']):
+            id = sample_mapping[i]
+            decoded_passage = tokenizer.decode(encoded_passage).replace('[CLS]', '').replace('SEP', '').replace(' ', '')
+            sim = get_similarity(decoded_passage, qastrings[id])
+            if id not in similarity_dict:
+                similarity_dict[id]=[(i, sim)] # the idx in tokenized_examples and its vector similarity with qastring
+            else:
+                similarity_dict[id].append((i, sim))
+        # for key in similarity_dict:
+        #   print(key, similarity_dict[key])
+        tokenized_option = {}
         for label in ['A', 'B', 'C']:
-            tokenized_examples[label] = tokenizer(
-                texts[label],
-                max_length=args.max_length,
-                truncation=True,
-                stride=args.doc_stride,
-                return_overflowing_tokens=True,
-                padding = False,
-            )
             tokenized_option[label] = tokenizer(
-                option[label],
-                stride=args.doc_stride,
-                return_overflowing_tokens=True,
-                padding = False,
-            )
+                    option[label],
+                    stride=args.doc_stride,
+                    return_overflowing_tokens=True,
+                    padding = False,
+                )
+        # print('w', len(tokenized_option['A']['input_ids']))
+        REMOVES=[]
+        for id in similarity_dict:
+            # id: article id
+            candidates = set() # (idx in tokenized_examples, similarity)
+            passagesForOne = similarity_dict[id]
+            for k in range(4):
+                # find the first 4 passages with highest prob
+                try:
+                    highsim = max(passagesForOne, key=lambda item:item[1])
+                    candidates.add(highsim)
+                    passagesForOne.remove(highsim)
+                    removes = list(set(passagesForOne)-candidates)
+                except: # if no 3 max can be returned
+                    break 
+            # print(id, candidates)
+            # print(to_remove)
+            
+            REMOVES.extend(removes) # those irrelevant passages
+        REMOVES = sorted(REMOVES, key=lambda x: x[0], reverse = True)
+        print(len(REMOVES))
+        # print(REMOVES)
+        for (index, sim) in REMOVES:
+            # input_ids token_type_ids attention_mask 
+            del tokenized_examples['input_ids'][index]
+            del tokenized_examples['token_type_ids'][index]
+            del tokenized_examples['attention_mask'][index]
+            del tokenized_examples["overflow_to_sample_mapping"][index] # "overflow_to_sample_mapping"
+            
+            assert len(tokenized_examples['input_ids'])==len(tokenized_examples['token_type_ids'])\
+            ==len(tokenized_examples['attention_mask'])==len(tokenized_examples['overflow_to_sample_mapping'])
+        
+        #############################
+        tokenized_pre_input = {'A':0, 'B':0, 'C':0}
+        for label in tokenized_pre_input:
+            tokenized_pre_input[label] = tokenized_examples
+        tokenized_examples = tokenized_pre_input
+        #############################
         for label in ['A', 'B', 'C']:
-            sample_mapping = tokenized_examples[label].pop("overflow_to_sample_mapping")
+            # input_ids token_type_ids attention_mask overflow_to_sample_mapping
+            print(tokenized_examples[label]["overflow_to_sample_mapping"])
+            sample_mapping = tokenized_examples[label]["overflow_to_sample_mapping"]
             option_len = len(tokenized_option[label]['input_ids'][0])
             tokenized_option[label]['input_ids'][0][0] = 102 # 102 [SEP]
             sample_mapping.append(-1)
-            for i,sample_id in enumerate(sample_mapping):        
+            for i, sample_id in enumerate(sample_mapping):        
                 if sample_id == sample_mapping[i+1]:
                     tokenized_examples[label]['input_ids'][i] = tokenized_examples[label]['input_ids'][i][:-option_len]
                     tokenized_examples[label]['input_ids'][i].extend(tokenized_option[label]['input_ids'][sample_id])
@@ -366,12 +434,15 @@ def main(args):
             # One example can give several spans, this is the index of the example containing this span of text.
             tokenized_inputs["example_id"].append(examples["id"][sample_index])
             tokenized_inputs['labels'].append(answers[sample_index])
+        # print(len(tokenized_inputs['example_id'])) # 762
+        # print(len(tokenized_inputs['labels']))
         return tokenized_inputs
-
-    def preprocess_augument_function(examples):
+    
+    def preprocess_augment_function(examples):
         option, texts = {}, {}
         for i,label in enumerate(['A', 'B', 'C']): option[label] = [q['stem']+q['choices'][i]['text'] for q in examples['question']]
         for label in ['A', 'B', 'C']: texts[label] = [p for p in examples['text']]
+        
         def convert(c):
             if c == 'A': return 0
             elif c == 'B': return 1
@@ -436,12 +507,13 @@ def main(args):
                                 tokenized_examples['C'][k][i]] for i in range(len(sample_mapping))] for k in keys}
         tokenized_inputs["labels"] = [] # 0 or 1 
         tokenized_inputs["example_id"] = []
+
         for sample_index in sample_mapping:
             # Grab the sequence corresponding to that example (to know what is the context and what is the question).
             # One example can give several spans, this is the index of the example containing this span of text.
-            tokenized_inputs["example_id"].append(examples["id"][sample_index])
+              
+            tokenized_inputs["example_id"].append(examples["id"][sample_index]) # example= a passage 
             tokenized_inputs['labels'].append(answers[sample_index])
-        
         inverted_file = {}
         for i,example_id in enumerate(sample_mapping):
             if example_id in inverted_file: inverted_file[example_id].append(i)
@@ -460,6 +532,8 @@ def main(args):
 
     column_names=raw_datasets["train"].column_names
     train_dataset, train_noaug_dataset, eval_dataset = raw_datasets['train'], raw_datasets['train_eval'], raw_datasets['validation']
+    
+    
     ###############
     train_dataset = train_dataset.map(normalize_qa)
     train_noaug_dataset = train_noaug_dataset.map(normalize_qa)
@@ -467,7 +541,7 @@ def main(args):
     ################
     
     train_dataset = train_dataset.map(
-            preprocess_augument_function,
+            preprocess_augment_function,
             batched=True,
             num_proc=1,
             remove_columns=column_names,
@@ -490,10 +564,6 @@ def main(args):
     #     logger.info(f"Sample {index} of the training set: {train_dataset[index]}.")
 
     data_collator = DataCollatorForMultipleChoice(tokenizer, pad_to_multiple_of=None)
-
-    train_dataloader = DataLoader(
-        train_dataset, shuffle=True, collate_fn=data_collator, batch_size=args.per_device_train_batch_size
-    )
     train_noaug_dataloader = DataLoader(train_noaug_dataset, collate_fn=data_collator, batch_size=args.per_device_eval_batch_size)
     eval_dataloader = DataLoader(eval_dataset, collate_fn=data_collator, batch_size=args.per_device_eval_batch_size)
     num_train_batch = len(train_dataloader)
@@ -517,7 +587,7 @@ def main(args):
     model.cuda()
 
     # Scheduler and math around the number of training steps.
-    num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
+    num_update_steps_per_epoch = math.ceil(len(train_noaug_dataloader) / args.gradient_accumulation_steps)
     if args.max_train_steps is None:
         args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
     else:

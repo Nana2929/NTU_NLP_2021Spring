@@ -26,14 +26,14 @@ from typing import Optional, Union
 
 from numpy.lib.function_base import select
 from rank_bm25 import BM25Okapi
-
+from utils import normalize_qa
 import datasets
 import torch
 import torch.nn as nn
 from datasets import load_dataset, load_metric
 from torch.utils.data.dataloader import DataLoader
 import time
-
+from utils import normalize_qa
 import transformers
 from transformers import (
     CONFIG_MAPPING,
@@ -323,6 +323,8 @@ def main(args):
         for i,example_id in enumerate(sample_mapping):
             if example_id in inverted_file: inverted_file[example_id].append(i)
             else: inverted_file[example_id] = [i]
+        
+        
         for i in range(len(inverted_file)):
             passage_count = len(inverted_file[i])
             if passage_count > 4:
@@ -335,6 +337,8 @@ def main(args):
                 _, inverted_file[i] = map(list, zip(*sorted(zip(doc_scores, inverted_file[i]),reverse=True)))
                 inverted_file[i] = inverted_file[i][:reduce_count]
         selected_passages = sorted([i for _,lst in inverted_file.items() for i in lst])
+        
+        
         for label in ['A', 'B', 'C']:
             sample_mapping = tokenized_examples[label].pop("overflow_to_sample_mapping")
             option_len = len(tokenized_option[label]['input_ids'][0])
@@ -493,6 +497,11 @@ def main(args):
 
     column_names=raw_datasets["train"].column_names
     train_dataset, train_noaug_dataset, eval_dataset = raw_datasets['train'], raw_datasets['train_eval'], raw_datasets['validation']
+    ##########################
+    train_dataset = train_dataset.map(normalize_qa)
+    train_noaug_dataset = train_noaug_dataset.map(normalize_qa)
+    eval_dataset  = eval_dataset .map(normalize_qa)
+    ###########################
     train_dataset = train_dataset.map(
             preprocess_augument_function,
             batched=True,

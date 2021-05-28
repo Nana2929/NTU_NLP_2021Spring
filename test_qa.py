@@ -34,7 +34,7 @@ import torch.nn as nn
 from datasets import load_dataset, load_metric
 from torch.utils.data.dataloader import DataLoader
 from tqdm.auto import tqdm
-
+from utils import normalize_qa
 import transformers
 from transformers import (
     CONFIG_MAPPING,
@@ -360,6 +360,9 @@ def main(args):
 
     column_names=raw_datasets["validation"].column_names
     eval_dataset = raw_datasets['validation']
+    #########
+    eval_dataset = eval_dataset.map(normalize_qa)
+    ########
     eval_dataset = eval_dataset.map(
             preprocess_function,
             batched=True,
