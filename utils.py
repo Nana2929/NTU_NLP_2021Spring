@@ -2,10 +2,6 @@
 import re
 # import pandas as pd 
 from sklearn.metrics.pairwise import cosine_similarity
-# !pip install fasttext
-# import fasttext.util
-# fasttext.util.download_model('zh', if_exists='ignore')
-# ft = fasttext.load_model('cc.zh.300.bin')
 
 def normalize_text(example, rep_speaker=False):
     """把classifcation example全形轉半形"""
@@ -74,12 +70,16 @@ def normalize_qa(example, rep_speaker=False):
         example['answer'] = 'C' #菜花
         
     return example 
-def get_similarity(passage, qastring):
-    '''Use fastText to get similarity
-        input: two strings'''
-    passageemb= ft.get_sentence_vector(passage) # 300-dim
-    qaemb = ft.get_sentence_vector(qastring)
-    return cosine_similarity([passageemb], [qaemb])[0][0]
+# !pip install fasttext
+# import fasttext.util
+# fasttext.util.download_model('zh', if_exists='ignore')
+# ft = fasttext.load_model('cc.zh.300.bin')
+# def get_similarity(passage, qastring):
+#     '''Use fastText to get similarity
+#         input: two strings'''
+#     passageemb= ft.get_sentence_vector(passage) # 300-dim
+#     qaemb = ft.get_sentence_vector(qastring)
+#     return cosine_similarity([passageemb], [qaemb])[0][0]
 
 # df =pd.read_csv('risk_cls/Train_risk_classification_ans.csv')
 # data = df.to_dict(orient='records')
