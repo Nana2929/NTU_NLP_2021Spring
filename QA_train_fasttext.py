@@ -324,7 +324,8 @@ def main(args):
             # process 1 question at one time
             answeridx = convert(examples['answer'][i]) # get 0, 1, 2 
             # print(examples['answer'][i], answeridx)
-            qastring = examples['question'][i]['stem']+ examples['question'][i]['choices'][answeridx]['text'] # question stem + answer text
+            answerstring = examples['question'][i]['choices'][answeridx]['text'] 
+            qastring = examples['question'][i]['stem']+ answerstring*5 
             # texts = [p for p in examples['text']]
             qastrings.append(qastring)
         assert len(qastrings) == len(examples['answer'])
@@ -584,7 +585,7 @@ def main(args):
     train_noaug_dataloader = DataLoader(train_noaug_dataset, collate_fn=data_collator, batch_size=args.per_device_eval_batch_size)
     eval_dataloader = DataLoader(eval_dataset, collate_fn=data_collator, batch_size=args.per_device_eval_batch_size)
     
-    num_train_noaug_batch = len(train_noaug_dataloader)
+    num_train_batch = len(train_noaug_dataloader)
     num_eval_batch = len(eval_dataloader)
     # Optimizer
     # Split weights in two groups, one with weight decay and the other not.
@@ -622,7 +623,7 @@ def main(args):
     total_batch_size = args.per_device_train_batch_size * args.gradient_accumulation_steps
 
     logger.info("***** Running training *****")
-    logger.info(f"  Num examples = {len(train_dataset)}")
+    logger.info(f"  Num examples = {len(train_noaug_dataset)}")
     logger.info(f"  Num Epochs = {args.num_train_epochs}")
     logger.info(f"  Instantaneous batch size per device = {args.per_device_train_batch_size}")
     logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
@@ -648,9 +649,9 @@ def main(args):
             if (step+1) % args.gradient_accumulation_steps == 0 or (step+1) == len(train_noaug_dataloader):
                 optimizer.step()
                 optimizer.zero_grad()
-            print(f'training [{step:3d}/{num_train_noaug_batch}] loss: {loss.item():.5f}',end='\r')
+            print(f'training [{step:3d}/{num_train_batch}] loss: {loss.item():.5f}',end='\r')
             
-        train_loss /= num_train_noaug_batch
+        train_loss /= num_train_batch
         
         model.eval()
         y_preds = np.zeros((num_train_samples+1,3))
@@ -669,7 +670,7 @@ def main(args):
                     y_preds[example_id][1] += np.log(y_pred[i][1])
                     y_preds[example_id][2] += np.log(y_pred[i][2])
                     y_trues[example_id] = y[i]
-            print(f'eval on train [{step:3d}/{num_train_noaug_batch}]',end='\r')
+            print(f'eval on train [{step:3d}/{num_train_batch}]',end='\r')
         train_acc = (np.sum(np.argmax(y_preds, axis=1) == y_trues) - 1)/num_train_samples
         
         y_preds = np.zeros((num_eval_samples+1,3))
@@ -677,6 +678,7 @@ def main(args):
         eval_loss = 0
         for step, batch in enumerate(eval_dataloader):
             with torch.no_grad():
+                batch.pop('overflow_to_sample_mapping')
                 example_ids = batch.pop('example_id').tolist()
                 for i in batch.keys():
                     batch[i] = batch[i].cuda()
