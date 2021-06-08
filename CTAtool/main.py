@@ -23,7 +23,7 @@ ap.add_argument("--input", required=True, help="input file of unaugmented data")
 ###### paths to ckip and CwnGraph's datas ##########
 ap.add_argument("--ckipdata", required = False, default ='./data', help="ckip data's location")
 ap.add_argument("--cwngit", required = False, default = './CwnGraph', help="cwn github's location")
-ap.add_argument("--cwn_py", required = True, default = './cwn_graph.pyobj', help="cwn_pyobj's location")
+ap.add_argument("--cwn_py", required = False, default = './cwn_graph.pyobj', help="cwn_pyobj's location")
 ###### out, hyperparams ########
 ap.add_argument("--output", required=False,  help="output file of unaugmented data")
 ap.add_argument("--num_aug", required=False, default = 2, type=int, help="number of augmented sentences per original sentence")
@@ -31,7 +31,7 @@ ap.add_argument("--alpha_sr", required=False, default = 0.1, type = float, help=
 ap.add_argument("--alpha_ri", required=False, default = 0.1, type = float, help="percent of words in each sentence to be inserted")
 ap.add_argument("--alpha_rs", required=False, default = 0.1, type = float, help="percent of words in each sentence to be swapped")
 ap.add_argument("--alpha_rd", required=False, default = 0.1, type = float, help="percent of words in each sentence to be deleted")
-ap.add_argument("--seed", required = False, default = 0, type = int, help="random seed")
+ap.add_argument("--seed", required = False, default = 0, type = str, help="random seed")
 args = ap.parse_args()
 ### refresh functions ###
 import importlib
@@ -50,8 +50,8 @@ else:
 if args.seed:
     myseed = args.seed
 else: myseed = '0'
-cwn_py_path = os.path.abspath(args.cwn_py)
-cwn_git_path = os.path.abspath(args.cwngit)
+cwn_py_path =  os.path.abspath(args.cwn_py)
+cwn_git_path =  os.path.abspath(args.cwngit)
 subprocess.call(['python3', 'functions.py', myseed, cwn_py_path , cwn_git_path])
 
 
