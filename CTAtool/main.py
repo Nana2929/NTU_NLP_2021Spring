@@ -12,10 +12,12 @@ import os
 import json
 import unicodedata
 import copy
+import re
 from ckiptagger import construct_dictionary, WS
 from tqdm import tqdm
 import tensorflow as tf
 import subprocess
+import sys
 print("Num GPUs Available: ", len(tf.config.experimental.list_physical_devices('GPU')))
 
 ap = argparse.ArgumentParser()
@@ -37,9 +39,6 @@ args = ap.parse_args()
 import importlib
 importlib.reload(functions)
 
-
-output = None
-
 if args.output:
     output = args.output
 else:
@@ -52,7 +51,13 @@ if args.seed:
 else: myseed = '0'
 cwn_py_path =  os.path.abspath(args.cwn_py)
 cwn_git_path =  os.path.abspath(args.cwngit)
-subprocess.call(['python3', 'functions.py', myseed, cwn_py_path , cwn_git_path])
+
+
+sys.path.append(cwn_git_path)
+from CwnGraph import CwnBase
+CwnBase.install_cwn(cwn_py_path) 
+cwn = CwnBase()
+subprocess.call(['python3', 'functions.py', myseed])
 
 
 #how much to replace each word by synonyms
@@ -68,8 +73,8 @@ if alpha_sr == alpha_ri == alpha_rs == alpha_rd == 0:
      ap.error('At least one alpha should be greater than zero')
 
 Med_terms =  {
-    "個管師": 1,
-    "一個月": 1,"可以": 1,"民眾": 1,
+    "個管師:": 1, "醫師:":1,"個管師": 1,"醫師":1,
+    "一個月": 1,"可以": 1,"民眾:": 1, "家屬:":1,
     "上班": 1,"稍微": 1,'很好':1, '感染者':1,
     '就是':1,'上網':1,'共用':1, '服藥':1,
     '洗門風':1,'好大':1, '微量的':1, '制度':1, '夏令營':1 , '病徵':1,'美麗的':1,
@@ -87,7 +92,7 @@ Med_dict = construct_dictionary(Med_terms)
 WordSeger = WS(os.path.abspath(args.ckipdata))
 
 def ParagraphSeg(Parg):
-    splitP = re.split('(。)',  Parg)
+    splitP = re.split(r'(。|\?|\？|…)',  Parg) # 以？和。和…分隔
     seg_sents = WordSeger(splitP, coerce_dictionary = Med_dict)
     return seg_sents 
 
@@ -105,7 +110,7 @@ def gen_eda(train_orig, output_file, alpha_sr, alpha_ri, alpha_rs, alpha_rd, num
         df = pd.read_csv(input_file)
         article_count=1
         ###########
-        # df = df[:3]
+        # df = df[:1]
         ############
         texts = df['text'].tolist()
         labels = df['label'].tolist()
@@ -115,12 +120,21 @@ def gen_eda(train_orig, output_file, alpha_sr, alpha_ri, alpha_rs, alpha_rd, num
             aug_sents_per_par = []
             seged_par= ParagraphSeg(par)
             seged_par = [t for t in seged_par if len(t) > 0] 
-            for j, sent in enumerate(seged_par):
-                aug_sents = eda(sent, alpha_sr=alpha_sr, alpha_ri=alpha_ri, alpha_rs=alpha_rs, p_rd=alpha_rd, num_aug = num_aug)
+            for sent in seged_par:
+                # 留下 每句話前面的個管師...
+                # 個管師: 民眾: 醫師: 家屬:
+                prefix = ''
+                if sent[0] in ['個管師','民眾','醫師','家屬']:
+                    prefix = sent[0]
+                    sent = sent[1:]
+                # print(sent)
+                aug_sents = eda(sent, alpha_sr=alpha_sr, alpha_ri=alpha_ri, alpha_rs=alpha_rs, p_rd=alpha_rd, num_aug = num_aug, cwn=cwn)
                 # a list of augmented sentence based on the current sentence
+                aug_sents = [(prefix+agsent) for agsent in aug_sents]
+
                 aug_sents_per_par.append(aug_sents) 
                 AUG_LEN = len(aug_sents)
-          
+            
           # here we should have a aug_sents_per_par with each sentence multiplicated to {num_aug+1} number
             aug_pars = [''] * AUG_LEN
             for sidx in range(len(aug_sents_per_par)):
@@ -164,8 +178,13 @@ def gen_eda(train_orig, output_file, alpha_sr, alpha_ri, alpha_rs, alpha_rd, num
             s_par = [t for t in s_par if len(t) > 0]
             aug_sents_per_par = []
             
-            for j, sent in enumerate(s_par):
-                aug_sents = eda(sent, alpha_sr=alpha_sr, alpha_ri=alpha_ri, alpha_rs=alpha_rs, p_rd=alpha_rd, num_aug = num_aug)
+            for sent in s_par:
+                prefix = ''
+                if sent[0] in ['個管師','民眾','醫師','家屬']:
+                    prefix = sent[0]
+                    sent = sent[1:]
+                aug_sents = eda(sent, alpha_sr=alpha_sr, alpha_ri=alpha_ri, alpha_rs=alpha_rs, p_rd=alpha_rd, num_aug = num_aug, cwn=cwn)
+                aug_sents = [(prefix+agsent) for agsent in aug_sents]
                 # print(aug_sents)
                 aug_sents_per_par.append(aug_sents[:-1]) # del the last sent(orig sent because we have appended it) 
                 AUG_LEN = len(aug_sents)-1

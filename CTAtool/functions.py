@@ -13,13 +13,9 @@ def seed_in(s):
 
 def main():
     seed_in(int(sys.argv[1]))
-    cwngpath = sys.argv[2]
-    cwngit = sys.argv[3]
-    sys.path.append(cwngit)
-    from CwnGraph import CwnBase
-    CwnBase.install_cwn(cwngpath) 
-    global cwn
-    cwn = CwnBase()
+
+
+
 
 ####### Remove Dummies ######
 def RemoveDummies(string):
@@ -36,16 +32,44 @@ def RemoveDummies(string):
     if len(new_string) == 0: new_string.append('')
     return new_string 
 
-def SynReplacement(words, n, verbose = False):
+def get_synonyms(word, cwn):
+    # special cases: 會噴出超多髒話，像是「去你媽的」，「他奶奶的」 ...
+    if word == '你': return ['汝']
+    if word == '他': return []
+    if word =='的': return []
+    try:
+        syms = set()
+        lemmas = cwn.find_lemma(word)
+        senses = []
+        for i in range(len(lemmas)):
+            sense = lemmas[i].senses
+            senses.extend(sense)
+        for sense in senses:
+        # print(sense)
+            sym = re.search('\((.*?)\)', str(sense))
+            for relation in sense.relations:
+                # print(relation)
+                if 'synonym' in relation:
+                    sym = re.search('\((.*?)\)', str(relation[1]))
+                if sym is not None:
+                    syms.add(sym.group(1))
+                break
+        return list(syms)
+    except: return []
+
+def SynReplacement(words, n, cwn, verbose = False):
     ''' n: number of replacement'''
     new_words = words.copy()
     random_word_list = list(set([word for word in words]))
     random.shuffle(random_word_list)
     num_replaced = 0
     for random_word in random_word_list:
-        synonyms = get_synonyms(random_word)
+        random_word = random_word.replace(' ', '')
+        synonyms = get_synonyms(random_word, cwn)
+        # print(random_word+'|', synonyms)
+        
         if len(synonyms) >= 1:
-            synonym = random.choice(list(synonyms))
+            synonym = random.choice(synonyms)
             new_words = [synonym if word == random_word else word for word in new_words]
             if verbose:
                 print("replaced", random_word, "with", synonym)
@@ -56,26 +80,6 @@ def SynReplacement(words, n, verbose = False):
     sentence = ' '.join(new_words)
     new_words = sentence.split(' ')
     return new_words
-
-def get_synonyms(word):
-    syms = set()
-    try:
-      lemmas = cwn.find_lemma(word)
-      senses = []
-      for i in range(len(lemmas)):
-        sense = lemmas[i].senses
-        senses.extend(sense)
-      for sense in senses:
-        sym = re.search('\((.*?)\)', str(sense))
-        for relation in sense.relations:
-          if 'synonym' in relation:
-            sym = re.search('\((.*?)\)', str(relation[1]))
-            if sym is not None:
-              syms.add(sym.group(1))
-          break
-      return list(syms)
-    except:
-      return list(word)
 
 ####### Random Deletion ######
 def RandomDel(string, p):
@@ -114,39 +118,41 @@ def swap_word(new_words):
     return new_words
 
 ############ Random Insertion ############ 
-def RandomInsertion(words, n):
+def RandomInsertion(words, n, cwn):
     if len(words) == 0:
       return words
     new_words = words.copy()
     for _ in range(n):
-      add_word(new_words)
+      add_word(new_words, cwn)
     return new_words
 
-def add_word(new_words):
+def add_word(new_words, cwn):
     synonyms = []
     counter = 0
     while len(synonyms) < 1:
       random_word = new_words[random.randint(0, len(new_words)-1)]
-      synonyms = get_synonyms(random_word)
+      random_word = random_word.replace(' ', '')
+      synonyms = get_synonyms(random_word, cwn)
+      # print(random_word+'|', synonyms)
       counter += 1
       if counter >= 10:
         return
-    random_synonym = synonyms[0]
+    random_synonym = random.choice(synonyms)
     random_idx = random.randint(0, len(new_words)-1)
     new_words.insert(random_idx, random_synonym)      
 
 ############ EDA ###################
-def eda(sentence, alpha_sr=0.1, alpha_ri=0.1, alpha_rs=0.1, p_rd=0.1, num_aug = 2):
+def eda(sentence, cwn, alpha_sr=0.1, alpha_ri=0.1, alpha_rs=0.1, p_rd=0.1, num_aug = 2):
     '''
     概念類似針對給定的一句sentence要對裡面多少percentage的字詞做這四種變換，如果α= 0.1，
     則該篇文章中10%的字詞會做同義詞變換、有10%的字詞會被刪除、10%的字會隨機換位，10%字詞的同義詞會
     被插入在隨機位置。
     '''
-
     '''
     input: a tokenized list of sentence
     return: [{num_aug} 數量的 augmented sentences (type: string), the original sentence (type: string)]
     '''
+    cwn = cwn 
     
     words = RemoveDummies(sentence)
     num_words = len(sentence)
@@ -156,24 +162,24 @@ def eda(sentence, alpha_sr=0.1, alpha_ri=0.1, alpha_rs=0.1, p_rd=0.1, num_aug = 
     if (alpha_sr > 0): 
         n_sr = max(1, int(alpha_sr*num_words))
         for _ in range(num_new_per_technique):
-            a_words = SynReplacement(words, n_sr)
+            a_words = SynReplacement(words, n_sr, cwn)
             augmented_sentences.append(''.join(a_words))
 
-	  #ri
+	#ri
     if (alpha_ri > 0):
         n_ri = max(1, int(alpha_ri*num_words))
         for _ in range(num_new_per_technique):
-            a_words = RandomInsertion(words, n_ri)
+            a_words = RandomInsertion(words, n_ri, cwn)
             augmented_sentences.append(''.join(a_words))
 
-	  #rs
+	#rs
     if (alpha_rs > 0):
         n_rs = max(1, int(alpha_rs*num_words))
         for _ in range(num_new_per_technique):
             a_words = RandomSwap(words, n_rs)
             augmented_sentences.append(''.join(a_words))
 
-	  #rd
+	#rd
     if (p_rd > 0):
         for _ in range(num_new_per_technique):
             a_words = RandomDel(words, p_rd)
@@ -193,4 +199,5 @@ def eda(sentence, alpha_sr=0.1, alpha_ri=0.1, alpha_rs=0.1, p_rd=0.1, num_aug = 
 
 if __name__ == '__main__':
     main()
+
     
