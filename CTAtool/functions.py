@@ -1,8 +1,9 @@
 '''
+Define the 4 augmented functions and the policy of using them
+for the first time using Chinese WordNet: 
+refer to https://github.com/lopentu/CwnGraph and download cwn_graph.pyobj
+References:
 https://stackoverflow.com/questions/13034496/using-global-variables-between-files
-for cwn: 
-# !git clone https://github.com/lopentu/CwnGraph
-# !gdown --id '1opGRw490cAizoj2JHzR8UIZME3Mc65Ze' --output cwn_graph.pyobj
 '''
 import sys
 import random

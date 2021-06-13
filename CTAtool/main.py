@@ -18,15 +18,15 @@ from tqdm import tqdm
 import tensorflow as tf
 import subprocess
 import sys
-print("Num GPUs Available: ", len(tf.config.experimental.list_physical_devices('GPU')))
+# print("Num GPUs Available: ", len(tf.config.experimental.list_physical_devices('GPU')))
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--input", required=True, help="input file of unaugmented data")
-###### paths to ckip and CwnGraph's datas ##########
+###### paths to ckip and CwnGraph's datas ########
 ap.add_argument("--ckipdata", required = False, default ='./data', help="ckip data's location")
 ap.add_argument("--cwngit", required = False, default = './CwnGraph', help="cwn github's location")
 ap.add_argument("--cwn_py", required = False, default = './cwn_graph.pyobj', help="cwn_pyobj's location")
-###### out, hyperparams ########
+##### hyperparameters ######
 ap.add_argument("--output", required=False,  help="output file of unaugmented data")
 ap.add_argument("--num_aug", required=False, default = 2, type=int, help="number of augmented sentences per original sentence")
 ap.add_argument("--alpha_sr", required=False, default = 0.1, type = float, help="percent of words in each sentence to be replaced by synonyms")
@@ -74,8 +74,8 @@ if alpha_sr == alpha_ri == alpha_rs == alpha_rd == 0:
      ap.error('At least one alpha should be greater than zero')
 
 Med_terms =  {
-    "個管師:": 1, "醫師:":1,"個管師": 1,"醫師":1,
-    "一個月": 1,"可以": 1,"民眾:": 1, "家屬:":1,
+    "個管師：": 2, "醫師：":2,"個管師": 1,"醫師":1,
+    "一個月": 1,"可以": 1,"民眾：": 2, "家屬：":2,
     "上班": 1,"稍微": 1,'很好':1, '感染者':1,
     '就是':1,'上網':1,'共用':1, '服藥':1,
     '洗門風':1,'好大':1, '微量的':1, '制度':1, '夏令營':1 , '病徵':1,'美麗的':1,
@@ -111,7 +111,7 @@ def gen_eda(train_orig, output_file, alpha_sr, alpha_ri, alpha_rs, alpha_rd, num
         df = pd.read_csv(input_file)
         article_count=1
         ###########
-        # df = df[:5]
+        # df = df[:1]
         ############
         texts = df['text'].tolist()
         labels = df['label'].tolist()
@@ -125,7 +125,8 @@ def gen_eda(train_orig, output_file, alpha_sr, alpha_ri, alpha_rs, alpha_rd, num
                 # 留下 每句話前面的個管師...
                 # 個管師: 民眾: 醫師: 家屬:
                 prefix = ''
-                if sent[0] in ['個管師','民眾','醫師','家屬']:
+                # print(sent[0])
+                if sent[0] in ['個管師：','民眾：','醫師：','家屬：']:
                     prefix = sent[0]
                     sent = sent[1:]
                 # print(sent)
@@ -181,7 +182,7 @@ def gen_eda(train_orig, output_file, alpha_sr, alpha_ri, alpha_rs, alpha_rd, num
             
             for sent in s_par:
                 prefix = ''
-                if sent[0] in ['個管師','民眾','醫師','家屬']:
+                if sent[0] in ['個管師：','民眾：','醫師：','家屬：']:
                     prefix = sent[0]
                     sent = sent[1:]
                 aug_sents = functions.eda(sent, alpha_sr=alpha_sr, alpha_ri=alpha_ri, alpha_rs=alpha_rs, p_rd=alpha_rd, num_aug = num_aug, cwn=cwn)
@@ -234,7 +235,4 @@ if __name__ == "__main__":
         num_aug = 2 
     gen_eda(args.input, output, alpha_sr=alpha_sr, alpha_ri=alpha_ri, alpha_rs=alpha_rs, alpha_rd=alpha_rd, num_aug = num_aug)
     if args.save_synonyms == 1: cache.save_synonym_dict()
-
-
-
 
