@@ -1,21 +1,22 @@
+'''
+https://stackoverflow.com/questions/13034496/using-global-variables-between-files
+for cwn: 
+# !git clone https://github.com/lopentu/CwnGraph
+# !gdown --id '1opGRw490cAizoj2JHzR8UIZME3Mc65Ze' --output cwn_graph.pyobj
+'''
 import sys
-import os
 import random
 from random import shuffle
 import re
-from copy import deepcopy 
-######### Synonym Replacement ##########
-# !git clone https://github.com/lopentu/CwnGraph
-# !gdown --id '1opGRw490cAizoj2JHzR8UIZME3Mc65Ze' --output cwn_graph.pyobj
+import cache
+
 
 def seed_in(s):
     random.seed(s)
 
 def main():
     seed_in(int(sys.argv[1]))
-
-
-
+    print('seed in.')
 
 ####### Remove Dummies ######
 def RemoveDummies(string):
@@ -37,8 +38,9 @@ def get_synonyms(word, cwn):
     if word == '你': return ['汝']
     if word == '他': return []
     if word =='的': return []
+    if word in cache.cache_dict: return cache.cache_dict[word]
+    syms = set()
     try:
-        syms = set()
         lemmas = cwn.find_lemma(word)
         senses = []
         for i in range(len(lemmas)):
@@ -54,8 +56,10 @@ def get_synonyms(word, cwn):
                 if sym is not None:
                     syms.add(sym.group(1))
                 break
-        return list(syms)
-    except: return []
+    except: pass
+    cache.cache_dict[word] = list(syms)
+    # print('in cache:', word, cache.cache_dict[word])
+    return list(syms)
 
 def SynReplacement(words, n, cwn, verbose = False):
     ''' n: number of replacement'''
@@ -153,7 +157,6 @@ def eda(sentence, cwn, alpha_sr=0.1, alpha_ri=0.1, alpha_rs=0.1, p_rd=0.1, num_a
     return: [{num_aug} 數量的 augmented sentences (type: string), the original sentence (type: string)]
     '''
     cwn = cwn 
-    
     words = RemoveDummies(sentence)
     num_words = len(sentence)
     num_new_per_technique = int(num_aug/4)+1
@@ -199,5 +202,7 @@ def eda(sentence, cwn, alpha_sr=0.1, alpha_ri=0.1, alpha_rs=0.1, p_rd=0.1, num_a
 
 if __name__ == '__main__':
     main()
+
+
 
     

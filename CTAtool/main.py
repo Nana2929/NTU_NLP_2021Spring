@@ -6,13 +6,13 @@ Based on: https://github.com/jasonwei20/eda_nlp/blob/master/code/augment.py
 '''
 import argparse
 import functions
-from functions import *
 import pandas as pd 
 import os
 import json
 import unicodedata
 import copy
 import re
+import cache 
 from ckiptagger import construct_dictionary, WS
 from tqdm import tqdm
 import tensorflow as tf
@@ -34,6 +34,7 @@ ap.add_argument("--alpha_ri", required=False, default = 0.1, type = float, help=
 ap.add_argument("--alpha_rs", required=False, default = 0.1, type = float, help="percent of words in each sentence to be swapped")
 ap.add_argument("--alpha_rd", required=False, default = 0.1, type = float, help="percent of words in each sentence to be deleted")
 ap.add_argument("--seed", required = False, default = 0, type = str, help="random seed")
+ap.add_argument("--save_synonyms", required = False, default = 0, type = int, help="0 for No, 1 for Yes")
 args = ap.parse_args()
 ### refresh functions ###
 import importlib
@@ -60,7 +61,7 @@ cwn = CwnBase()
 subprocess.call(['python3', 'functions.py', myseed])
 
 
-#how much to replace each word by synonyms
+# how much to replace each word by synonyms
 alpha_sr = args.alpha_sr
 # how much to insert new words that are synonyms
 alpha_ri = args.alpha_ri
@@ -110,7 +111,7 @@ def gen_eda(train_orig, output_file, alpha_sr, alpha_ri, alpha_rs, alpha_rd, num
         df = pd.read_csv(input_file)
         article_count=1
         ###########
-        # df = df[:1]
+        # df = df[:5]
         ############
         texts = df['text'].tolist()
         labels = df['label'].tolist()
@@ -128,7 +129,7 @@ def gen_eda(train_orig, output_file, alpha_sr, alpha_ri, alpha_rs, alpha_rd, num
                     prefix = sent[0]
                     sent = sent[1:]
                 # print(sent)
-                aug_sents = eda(sent, alpha_sr=alpha_sr, alpha_ri=alpha_ri, alpha_rs=alpha_rs, p_rd=alpha_rd, num_aug = num_aug, cwn=cwn)
+                aug_sents = functions.eda(sent, alpha_sr=alpha_sr, alpha_ri=alpha_ri, alpha_rs=alpha_rs, p_rd=alpha_rd, num_aug = num_aug, cwn=cwn)
                 # a list of augmented sentence based on the current sentence
                 aug_sents = [(prefix+agsent) for agsent in aug_sents]
 
@@ -183,7 +184,7 @@ def gen_eda(train_orig, output_file, alpha_sr, alpha_ri, alpha_rs, alpha_rd, num
                 if sent[0] in ['個管師','民眾','醫師','家屬']:
                     prefix = sent[0]
                     sent = sent[1:]
-                aug_sents = eda(sent, alpha_sr=alpha_sr, alpha_ri=alpha_ri, alpha_rs=alpha_rs, p_rd=alpha_rd, num_aug = num_aug, cwn=cwn)
+                aug_sents = functions.eda(sent, alpha_sr=alpha_sr, alpha_ri=alpha_ri, alpha_rs=alpha_rs, p_rd=alpha_rd, num_aug = num_aug, cwn=cwn)
                 aug_sents = [(prefix+agsent) for agsent in aug_sents]
                 # print(aug_sents)
                 aug_sents_per_par.append(aug_sents[:-1]) # del the last sent(orig sent because we have appended it) 
@@ -226,10 +227,13 @@ def gen_eda(train_orig, output_file, alpha_sr, alpha_ri, alpha_rs, alpha_rd, num
 
 if __name__ == "__main__":
     # generate augmented sentences and output into a new file
-    if args.num_aug: num_aug = args.num_aug 
-    else:num_aug = 2 
+    cache.init()   
+    if args.num_aug: 
+        num_aug = args.num_aug 
+    else:
+        num_aug = 2 
     gen_eda(args.input, output, alpha_sr=alpha_sr, alpha_ri=alpha_ri, alpha_rs=alpha_rs, alpha_rd=alpha_rd, num_aug = num_aug)
-
+    if args.save_synonyms == 1: cache.save_synonym_dict()
 
 
 
