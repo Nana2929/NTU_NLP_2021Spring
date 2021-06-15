@@ -27,7 +27,7 @@ ap.add_argument("--ckipdata", required = False, default ='./data', help="ckip da
 ap.add_argument("--cwngit", required = False, default = './CwnGraph', help="cwn github's location")
 ap.add_argument("--cwn_py", required = False, default = './cwn_graph.pyobj', help="cwn_pyobj's location")
 ##### hyperparameters ######
-ap.add_argument("--output", required=False,  help="output file of unaugmented data")
+ap.add_argument("--output", required=False,  help="output file of augmented data")
 ap.add_argument("--num_aug", required=False, default = 2, type=int, help="number of augmented sentences per original sentence")
 ap.add_argument("--alpha_sr", required=False, default = 0.1, type = float, help="percent of words in each sentence to be replaced by synonyms")
 ap.add_argument("--alpha_ri", required=False, default = 0.1, type = float, help="percent of words in each sentence to be inserted")

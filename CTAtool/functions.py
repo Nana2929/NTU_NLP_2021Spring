@@ -60,7 +60,9 @@ def get_synonyms(word, cwn):
     except: pass
     cache.cache_dict[word] = list(syms)
     # print('in cache:', word, cache.cache_dict[word])
-    return list(syms)
+    syms = list(syms)
+    syms = [s for s in syms if s != word]
+    return syms
 
 def SynReplacement(words, n, cwn, verbose = False):
     ''' n: number of replacement'''
@@ -79,7 +81,7 @@ def SynReplacement(words, n, cwn, verbose = False):
             if verbose:
                 print("replaced", random_word, "with", synonym)
             num_replaced += 1
-        if num_replaced >= n: #only replace up to n words
+        if num_replaced >= n: # only replace up to n words
             break
 	# this is stupid but we need it, trust me
     sentence = ' '.join(new_words)
