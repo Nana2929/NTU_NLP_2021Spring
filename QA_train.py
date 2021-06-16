@@ -14,7 +14,7 @@
 """
 Fine-tuning a huggingface Transformers model on multiple choice relying on the accelerate library without using a Trainer.
 """
-
+import jieba
 import argparse
 import logging
 import math
@@ -101,7 +101,7 @@ def parse_args():
         "--model_name_or_path",
         type=str,
         help="Path to pretrained model or model identifier from huggingface.co/models.",
-        default='ckiplab/albert-base-chinese',
+        default='ckiplab/bert-base-chinese',
     )
     parser.add_argument(
         "--max_position_embeddings",
@@ -122,11 +122,6 @@ def parse_args():
         help="Pretrained tokenizer name or path if not the same as model_name",
     )
     parser.add_argument(
-        "--use_slow_tokenizer",
-        action="store_true",
-        help="If passed, will use a slow tokenizer (not backed by the huggingface Tokenizers library).",
-    )
-    parser.add_argument(
         "--per_device_train_batch_size",
         type=int,
         default=4,
@@ -135,17 +130,17 @@ def parse_args():
     parser.add_argument(
         "--per_device_eval_batch_size",
         type=int,
-        default=4,
+        default=16,
         help="Batch size (per device) for the evaluation dataloader.",
     )
     parser.add_argument(
         "--learning_rate",
         type=float,
-        default=1e-5,
+        default=5e-5,
         help="Initial learning rate (after the potential warmup period) to use.",
     )
-    parser.add_argument("--weight_decay", type=float, default=5e-3, help="Weight decay to use.")
-    parser.add_argument("--num_train_epochs", type=int, default=4, help="Total number of training epochs to perform.")
+    parser.add_argument("--weight_decay", type=float, default=0, help="Weight decay to use.")
+    parser.add_argument("--num_train_epochs", type=int, default=20, help="Total number of training epochs to perform.")
     parser.add_argument(
         "--max_train_steps",
         type=int,
@@ -155,27 +150,12 @@ def parse_args():
     parser.add_argument(
         "--gradient_accumulation_steps",
         type=int,
-        default=8,
+        default=4,
         help="Number of updates steps to accumulate before performing a backward/update pass.",
     )
-    parser.add_argument(
-        "--lr_scheduler_type",
-        type=SchedulerType,
-        default="linear",
-        help="The scheduler type to use.",
-        choices=["linear", "cosine", "cosine_with_restarts", "polynomial", "constant", "constant_with_warmup"],
-    )
-    parser.add_argument(
-        "--num_warmup_steps", type=int, default=0, help="Number of steps for the warmup in the lr scheduler."
-    )
     parser.add_argument("--save_model_dir", type=str, default='./MCQ_model', help="Where to store the final model.")
-    parser.add_argument("--seed", type=int, default=1, help="A seed for reproducible training.")
-    parser.add_argument(
-        "--model_type",
-        type=str,
-        default=None,
-        help="Model type to use if training from scratch.",
-    )
+    parser.add_argument("--seed", type=int, default=17, help="A seed for reproducible training.")
+
     parser.add_argument(
         "--debug",
         action="store_true",
@@ -277,20 +257,35 @@ def main(args):
     num_eval_samples = len(raw_datasets['validation'])
     if args.debug:
         for split in raw_datasets.keys():
-            raw_datasets[split] = raw_datasets[split].select(range(300))
+            raw_datasets[split] = raw_datasets[split].select(range(5))
     
-    # tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_name, use_fast=not args.use_slow_tokenizer)
     tokenizer = BertTokenizerFast.from_pretrained(args.tokenizer_name)
     model = AutoModelForMultipleChoice.from_pretrained(args.model_name_or_path)
-    model.config.attention_probs_dropout_prob = args.dropout
-    model.config.hidden_dropout_prob = args.dropout
-    model.config.classifier_dropout_prob = 0.5
+    # model.config.attention_probs_dropout_prob = args.dropout
+    # model.config.hidden_dropout_prob = args.dropout
+    # model.config.classifier_dropout_prob = 0.5
     model.resize_token_embeddings(len(tokenizer))
-    
+    jieba.load_userdict('./special_token.txt')
     # Preprocessing the datasets.
     # First we tokenize all the texts.
     def preprocess_function(examples):
-        option, texts = {}, {}
+        option, texts = {}, {}       
+        query = [jieba.lcut_for_search(q['choices'][0]['text']+' '+q['choices'][1]['text']+' '+q['choices'][2]['text']) for q in examples['question']]
+        for i in range(len(examples['text'])):
+            examples['text'][i] = examples['text'][i].split('###')
+            tokenized_corpus = [jieba.lcut_for_search(j) for j in examples['text'][i]]
+            bm25 = BM25Okapi(tokenized_corpus)
+            doc_scores = bm25.get_scores(query[i])
+            passage_count = len(tokenized_corpus)
+            _, rank = map(list, zip(*sorted(zip(doc_scores, range(passage_count)),reverse=True)))
+            rank = sorted(rank[:min(passage_count,5)])
+            examples['text'][i] = ''.join([examples['text'][i][r] for r in rank])
+            while len(examples['text'][i]) < args.max_length*2: examples['text'][i] += ('/'+examples['text'][i])
+            # print(examples['text'][i])
+            # print(examples['question'][i]['stem'])
+            # print(query[i])
+            # print(examples['answer'][i])
+
         for i,label in enumerate(['A', 'B', 'C']): option[label] = [q['stem']+q['choices'][i]['text'] for q in examples['question']]
         for label in ['A', 'B', 'C']: texts[label] = [p for p in examples['text']]
         def convert(c):
@@ -324,18 +319,18 @@ def main(args):
             if example_id in inverted_file: inverted_file[example_id].append(i)
             else: inverted_file[example_id] = [i]
         
-        
         for i in range(len(inverted_file)):
-            passage_count = len(inverted_file[i])
-            if passage_count > 4:
-                tokenized_corpus = [tokenized_examples['A']['input_ids'][j] for j in inverted_file[i]]
-                bm25 = BM25Okapi(tokenized_corpus)
-                tokenized_query = [tokenized_option[j]['input_ids'][i] for j in ['A', 'B', 'C']]
-                tokenized_query = [t for option in tokenized_query for t in option]
-                doc_scores = bm25.get_scores(tokenized_query)
-                reduce_count = int(passage_count * 0.8)
-                _, inverted_file[i] = map(list, zip(*sorted(zip(doc_scores, inverted_file[i]),reverse=True)))
-                inverted_file[i] = inverted_file[i][:reduce_count]
+            inverted_file[i] = inverted_file[i][:1]
+            # passage_count = len(inverted_file[i])
+            # if passage_count > 4:
+            #     tokenized_corpus = [tokenized_examples['A']['input_ids'][j] for j in inverted_file[i]]
+            #     bm25 = BM25Okapi(tokenized_corpus)
+            #     doc_scores = bm25.get_scores(query[i])
+            #     reduce_count = int(passage_count * 0.9)
+            #     _, inverted_file[i] = map(list, zip(*sorted(zip(doc_scores, inverted_file[i]),reverse=True)))
+            #     inverted_file[i] = inverted_file[i][:reduce_count]
+        # print(inverted_file)
+        # exit()
         selected_passages = sorted([i for _,lst in inverted_file.items() for i in lst])
         
         
@@ -503,7 +498,7 @@ def main(args):
     eval_dataset  = eval_dataset .map(normalize_qa)
     ###########################
     train_dataset = train_dataset.map(
-            preprocess_augument_function,
+            preprocess_function,
             batched=True,
             num_proc=1,
             remove_columns=column_names,
@@ -559,13 +554,6 @@ def main(args):
         args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
     else:
         args.num_train_epochs = math.ceil(args.max_train_steps / num_update_steps_per_epoch)
-
-    lr_scheduler = get_scheduler(
-        name=args.lr_scheduler_type,
-        optimizer=optimizer,
-        num_warmup_steps=args.num_warmup_steps,
-        num_training_steps=args.max_train_steps,
-    )
 
 
     # Train!
