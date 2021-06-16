@@ -42,6 +42,7 @@ def normalize_qa(example, rep_speaker=False):
     '''normalize qa file w.r.t. its format'''
     # text 
     example['text'] = normalize_string(example['text'])
+<<<<<<< Updated upstream
     example['text'] = re.sub('醫師a:', '###醫師a:', example['text'])
     example['text'] = re.sub('醫師b:', '###醫師b:', example['text'])
     example['text'] = re.sub('醫師:', '###醫師:', example['text'])
@@ -49,6 +50,16 @@ def normalize_qa(example, rep_speaker=False):
     if rep_speaker:
         example['text'] = re.sub(r'醫師:|個管師:', '[S1]:', example['text'])
         example['text'] = re.sub(r'家屬:|民眾:', '[S2]:', example['text'])
+=======
+    # if rep_speaker:
+    #     example['text'] = re.sub(r'醫師:|個管師:', '###[S1]:', example['text'])
+    #     example['text'] = re.sub(r'家屬:|民眾:', '[S2]:', example['text'])
+    
+    example['text'] = re.sub('醫師:', '###醫師:', example['text'])
+    example['text'] = re.sub('醫師a:', '###醫師a:', example['text'])
+    example['text'] = re.sub('醫師b:', '###醫師b:', example['text'])
+    example['text'] = re.sub('個管師:', '###個管師:', example['text'])
+>>>>>>> Stashed changes
     
     # q stem 
     example['question']['stem'] = normalize_string(example['question']['stem'])
@@ -70,8 +81,44 @@ def normalize_qa(example, rep_speaker=False):
     example['question']['choices'] = proced
     example['answer'] = example['answer'].strip()
     example['answer'] = normalize_string(example['answer'], to_lower = False)
-    if example['answer'] not in ['A', 'B', 'C']:
-        example['answer'] = 'C' #菜花
+    # if example['answer'] not in ['A', 'B', 'C']:
+    #     example['answer'] = 'C' #菜花
+        
+    return example 
+
+def normalize_qa_test(example, rep_speaker=False):
+    '''normalize qa file w.r.t. its format'''
+    # text 
+    example['text'] = normalize_string(example['text'])
+    # if rep_speaker:
+    #     example['text'] = re.sub(r'醫師:|個管師:', '###[S1]:', example['text'])
+    #     example['text'] = re.sub(r'家屬:|民眾:', '[S2]:', example['text'])
+    
+    example['text'] = re.sub('醫師:', '###醫師:', example['text'])
+    example['text'] = re.sub('醫師a:', '###醫師a:', example['text'])
+    example['text'] = re.sub('醫師b:', '###醫師b:', example['text'])
+    example['text'] = re.sub('個管師:', '###個管師:', example['text'])
+    
+    # q stem 
+    example['question']['stem'] = normalize_string(example['question']['stem'])
+    if rep_speaker:
+        example['question']['stem']= re.sub(r'醫師|個管師', '[S1]', example['question']['stem'])
+        example['question']['stem']= re.sub(r'家屬|民眾', '[S2]', example['question']['stem'])
+    # q texts
+    proced = []
+    for i, choice in enumerate(example['question']['choices']):
+        choice['text'] = normalize_string(choice['text'])
+        if rep_speaker:
+            choice['text']= re.sub(r'醫師|個管師', '[S1]', choice['text'])
+            choice['text']= re.sub(r'家屬|民眾', '[S2]', choice['text'])
+        choice['label'] = choice['label'].strip()
+        choice['label'] = normalize_string(choice['label'], to_lower = False)
+        proced.append(choice)
+        assert choice['label'] in ['A', 'B', 'C']
+    assert len(proced) == 3
+    example['question']['choices'] = proced
+    # if example['answer'] not in ['A', 'B', 'C']:
+    #     example['answer'] = 'C' #菜花
         
     return example 
 # !pip install fasttext

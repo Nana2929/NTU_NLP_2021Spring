@@ -22,17 +22,17 @@ import sys
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--input", required=True, help="input file of unaugmented data")
-###### paths to ckip and CwnGraph's datas ########
-ap.add_argument("--ckipdata", required = False, default ='./data', help="ckip data's location")
+###### paths to ckip and CwnGraph's datas ##########
+ap.add_argument("--ckipdata", required = False, default ='../data', help="ckip data's location")
 ap.add_argument("--cwngit", required = False, default = './CwnGraph', help="cwn github's location")
 ap.add_argument("--cwn_py", required = False, default = './cwn_graph.pyobj', help="cwn_pyobj's location")
 ##### hyperparameters ######
 ap.add_argument("--output", required=False,  help="output file of augmented data")
 ap.add_argument("--num_aug", required=False, default = 2, type=int, help="number of augmented sentences per original sentence")
-ap.add_argument("--alpha_sr", required=False, default = 0.1, type = float, help="percent of words in each sentence to be replaced by synonyms")
-ap.add_argument("--alpha_ri", required=False, default = 0.1, type = float, help="percent of words in each sentence to be inserted")
-ap.add_argument("--alpha_rs", required=False, default = 0.1, type = float, help="percent of words in each sentence to be swapped")
-ap.add_argument("--alpha_rd", required=False, default = 0.1, type = float, help="percent of words in each sentence to be deleted")
+ap.add_argument("--alpha_sr", required=False, default = 0.2, type = float, help="percent of words in each sentence to be replaced by synonyms")
+ap.add_argument("--alpha_ri", required=False, default = 0.2, type = float, help="percent of words in each sentence to be inserted")
+ap.add_argument("--alpha_rs", required=False, default = 0.2, type = float, help="percent of words in each sentence to be swapped")
+ap.add_argument("--alpha_rd", required=False, default = 0.2, type = float, help="percent of words in each sentence to be deleted")
 ap.add_argument("--seed", required = False, default = 0, type = str, help="random seed")
 ap.add_argument("--save_synonyms", required = False, default = 0, type = int, help="0 for No, 1 for Yes")
 args = ap.parse_args()

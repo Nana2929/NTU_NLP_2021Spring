@@ -33,7 +33,6 @@ import torch.nn as nn
 from datasets import load_dataset, load_metric
 from torch.utils.data.dataloader import DataLoader
 import time
-from utils import normalize_qa
 import transformers
 from transformers import (
     CONFIG_MAPPING,
@@ -56,6 +55,7 @@ from transformers import (
 from transformers.file_utils import PaddingStrategy
 from tqdm.auto import tqdm
 from collections import Counter
+import jieba
 
 
 logger = logging.getLogger(__name__)
@@ -79,6 +79,10 @@ def parse_args():
     )
     parser.add_argument(
         "--train_file", type=str, default='./data/Train_qa_ans.json', help="A json file containing the training data."
+    )
+    
+    parser.add_argument(
+        "--train_file_aug", type=str, default='./data/qa_aug_04.json', help="A json file containing the training data."
     )
     parser.add_argument(
         "--validation_file", type=str, default='./data/clean_qa.json', help="A json file containing the validation data."
@@ -124,22 +128,33 @@ def parse_args():
     parser.add_argument(
         "--per_device_train_batch_size",
         type=int,
-        default=4,
+        default=2,
         help="Batch size (per device) for the training dataloader.",
     )
     parser.add_argument(
         "--per_device_eval_batch_size",
         type=int,
+<<<<<<< Updated upstream
         default=16,
+=======
+        default=8,
+>>>>>>> Stashed changes
         help="Batch size (per device) for the evaluation dataloader.",
     )
     parser.add_argument(
         "--learning_rate",
         type=float,
+<<<<<<< Updated upstream
         default=5e-5,
         help="Initial learning rate (after the potential warmup period) to use.",
     )
     parser.add_argument("--weight_decay", type=float, default=0, help="Weight decay to use.")
+=======
+        default=1e-6,
+        help="Initial learning rate (after the potential warmup period) to use.",
+    )
+    parser.add_argument("--weight_decay", type=float, default=5e-2, help="Weight decay to use.")
+>>>>>>> Stashed changes
     parser.add_argument("--num_train_epochs", type=int, default=20, help="Total number of training epochs to perform.")
     parser.add_argument(
         "--max_train_steps",
@@ -154,8 +169,13 @@ def parse_args():
         help="Number of updates steps to accumulate before performing a backward/update pass.",
     )
     parser.add_argument("--save_model_dir", type=str, default='./MCQ_model', help="Where to store the final model.")
-    parser.add_argument("--seed", type=int, default=17, help="A seed for reproducible training.")
-
+    parser.add_argument("--seed", type=int, default=7, help="A seed for reproducible training.")
+    parser.add_argument(
+        "--model_type",
+        type=str,
+        default=None,
+        help="Model type to use if training from scratch.",
+    )
     parser.add_argument(
         "--debug",
         action="store_true",
@@ -248,7 +268,7 @@ def main(args):
     transformers.utils.logging.set_verbosity_error()
 
     data_files = {}
-    data_files["train"] = args.train_file
+    data_files["train"] = args.train_file_aug
     data_files["train_eval"] = args.train_file
     data_files["validation"] = args.validation_file
     extension = args.dataset_script
@@ -257,7 +277,7 @@ def main(args):
     num_eval_samples = len(raw_datasets['validation'])
     if args.debug:
         for split in raw_datasets.keys():
-            raw_datasets[split] = raw_datasets[split].select(range(5))
+            raw_datasets[split] = raw_datasets[split].select(range(10))
     
     tokenizer = BertTokenizerFast.from_pretrained(args.tokenizer_name)
     model = AutoModelForMultipleChoice.from_pretrained(args.model_name_or_path)
@@ -265,28 +285,39 @@ def main(args):
     # model.config.hidden_dropout_prob = args.dropout
     # model.config.classifier_dropout_prob = 0.5
     model.resize_token_embeddings(len(tokenizer))
+    
     jieba.load_userdict('./special_token.txt')
-    # Preprocessing the datasets.
-    # First we tokenize all the texts.
+
     def preprocess_function(examples):
-        option, texts = {}, {}       
-        query = [jieba.lcut_for_search(q['choices'][0]['text']+' '+q['choices'][1]['text']+' '+q['choices'][2]['text']) for q in examples['question']]
+        question, option, texts = {}, {}, {}
+        for i,label in enumerate(['A', 'B', 'C']): question[label] = [q['stem'] for q in examples['question']]
+        for i,label in enumerate(['A', 'B', 'C']): option[label] = [q['choices'][i]['text'] for q in examples['question']]
+        query_question = [jieba.lcut_for_search(q['stem']) for q in examples['question']]
+        query_option = [jieba.lcut_for_search(q['choices'][0]['text']+'/'+q['choices'][1]['text']+'/'+q['choices'][2]['text']) for q in examples['question']]
+        # print(query_question)
+        # print(query_option)
+        # print(examples['text'][0])
         for i in range(len(examples['text'])):
             examples['text'][i] = examples['text'][i].split('###')
-            tokenized_corpus = [jieba.lcut_for_search(j) for j in examples['text'][i]]
-            bm25 = BM25Okapi(tokenized_corpus)
-            doc_scores = bm25.get_scores(query[i])
-            passage_count = len(tokenized_corpus)
-            _, rank = map(list, zip(*sorted(zip(doc_scores, range(passage_count)),reverse=True)))
-            rank = sorted(rank[:min(passage_count,5)])
-            examples['text'][i] = ''.join([examples['text'][i][r] for r in rank])
-            while len(examples['text'][i]) < args.max_length*2: examples['text'][i] += ('/'+examples['text'][i])
-            # print(examples['text'][i])
-            # print(examples['question'][i]['stem'])
-            # print(query[i])
-            # print(examples['answer'][i])
+            for j,text in enumerate(examples['text'][i]):
+                examples['text'][i][j] = jieba.lcut_for_search(text)
+            bm25 = BM25Okapi(examples['text'][i])
+            doc_scores = bm25.get_scores(query_option[i])
+            passage_count = len(examples['text'][i]) 
+            reduce_count = int(passage_count * 0.1)
+            _, retrieve_idx = map(list, zip(*sorted(zip(doc_scores, range(passage_count)),reverse=True)))
+            # retrieve_idx = sorted(retrieve_idx[:reduce_count])
+            retrieve_idx = sorted(retrieve_idx[:min(passage_count-1,5)])
+            
+            retrieve_passage = []
+            for r in retrieve_idx: retrieve_passage.extend(examples['text'][i][r])
+            examples['text'][i] = ''.join(retrieve_passage)
+            while len(examples['text'][i]) < args.max_length: examples['text'][i] = examples['text'][i] + '/' + examples['text'][i]
 
-        for i,label in enumerate(['A', 'B', 'C']): option[label] = [q['stem']+q['choices'][i]['text'] for q in examples['question']]
+            # print(examples['text'][i])
+            # print(query_option[i])
+            # print(len(examples['text'][i]))
+        
         for label in ['A', 'B', 'C']: texts[label] = [p for p in examples['text']]
         def convert(c):
             if c == 'A': return 0
@@ -295,7 +326,11 @@ def main(args):
             else: 
                 print(f'Invalid label "{c}"')
                 exit()
-
+        # x = 64
+        # print(examples['text'][x])
+        # print(examples['question'][x]['stem'])
+        # print(query_option[x])
+        # exit()
         answers = list(map(convert, examples['answer']))
         tokenized_examples, tokenized_option = {}, {}
         for label in ['A', 'B', 'C']:
@@ -308,9 +343,9 @@ def main(args):
                 padding = False,
             )
             tokenized_option[label] = tokenizer(
+                question[label],
                 option[label],
                 stride = args.doc_stride,
-                return_overflowing_tokens = True,
                 padding = False,
             )
         sample_mapping = tokenized_examples['A']["overflow_to_sample_mapping"]
@@ -319,25 +354,35 @@ def main(args):
             if example_id in inverted_file: inverted_file[example_id].append(i)
             else: inverted_file[example_id] = [i]
         
+        # print([len(v) for k,v in inverted_file.items()])
+        # exit()
         for i in range(len(inverted_file)):
-            inverted_file[i] = inverted_file[i][:1]
+            inverted_file[i] = [inverted_file[i][0]]
             # passage_count = len(inverted_file[i])
+            # print(inverted_file[i])
+            # exit()
             # if passage_count > 4:
             #     tokenized_corpus = [tokenized_examples['A']['input_ids'][j] for j in inverted_file[i]]
+            #     tokenized_corpus = tokenizer.batch_decode(tokenized_corpus, skip_special_tokens=True)
             #     bm25 = BM25Okapi(tokenized_corpus)
-            #     doc_scores = bm25.get_scores(query[i])
+            #     # tokenized_query = [tokenized_option[j]['input_ids'][i] for j in ['A', 'B', 'C']]
+            #     # tokenized_query = [t for option in tokenized_query for t in option]
+
+            #     doc_scores = bm25.get_scores(query_option[i])
             #     reduce_count = int(passage_count * 0.9)
             #     _, inverted_file[i] = map(list, zip(*sorted(zip(doc_scores, inverted_file[i]),reverse=True)))
             #     inverted_file[i] = inverted_file[i][:reduce_count]
-        # print(inverted_file)
-        # exit()
         selected_passages = sorted([i for _,lst in inverted_file.items() for i in lst])
         
         
         for label in ['A', 'B', 'C']:
             sample_mapping = tokenized_examples[label].pop("overflow_to_sample_mapping")
+            # option_len = len(tokenized_option[label]['input_ids'][0])
+            # tokenized_option[label]['input_ids'][0][0] = 102 # 102 [SEP]
+            tokenized_option[label]['input_ids'][0].pop(0)
+            tokenized_option[label]['token_type_ids'][0].pop(0)
+            tokenized_option[label]['attention_mask'][0].pop(0)
             option_len = len(tokenized_option[label]['input_ids'][0])
-            tokenized_option[label]['input_ids'][0][0] = 102 # 102 [SEP]
             sample_mapping.append(-1)
             for i,sample_id in enumerate(sample_mapping):      
                 if sample_id == sample_mapping[i+1]:
@@ -364,8 +409,12 @@ def main(args):
                     if sample_mapping[i+1] == -1:
                         break
                     else:
+                        # option_len = len(tokenized_option[label]['input_ids'][sample_id+1])
+                        # tokenized_option[label]['input_ids'][sample_id+1][0] = 102
+                        tokenized_option[label]['input_ids'][sample_id+1].pop(0)
+                        tokenized_option[label]['token_type_ids'][sample_id+1].pop(0)
+                        tokenized_option[label]['attention_mask'][sample_id+1].pop(0)
                         option_len = len(tokenized_option[label]['input_ids'][sample_id+1])
-                        tokenized_option[label]['input_ids'][sample_id+1][0] = 102
             sample_mapping.pop(-1)
                 
         keys = tokenized_examples['A'].keys()
@@ -386,8 +435,31 @@ def main(args):
         return tokenized_inputs
 
     def preprocess_augument_function(examples):
-        option, texts = {}, {}
-        for i,label in enumerate(['A', 'B', 'C']): option[label] = [q['stem']+q['choices'][i]['text'] for q in examples['question']]
+        question, option, texts = {}, {}, {}
+        for i,label in enumerate(['A', 'B', 'C']): question[label] = [q['stem'] for q in examples['question']]
+        for i,label in enumerate(['A', 'B', 'C']): option[label] = [q['choices'][i]['text'] for q in examples['question']]
+        query_question = [jieba.lcut_for_search(q['stem']) for q in examples['question']]
+        query_option = [jieba.lcut_for_search(q['choices'][0]['text']+'/'+q['choices'][1]['text']+'/'+q['choices'][2]['text']) for q in examples['question']]
+        # print(query_question)
+        # print(query_option)
+        # print(examples['text'][0])
+        for i in range(len(examples['text'])):
+            examples['text'][i] = examples['text'][i].split('###')
+            for j,text in enumerate(examples['text'][i]):
+                examples['text'][i][j] = jieba.lcut_for_search(text)
+            bm25 = BM25Okapi(examples['text'][i])
+            doc_scores = bm25.get_scores(query_option[i])
+            passage_count = len(examples['text'][i]) 
+            reduce_count = int(passage_count * 0.1)
+            _, retrieve_idx = map(list, zip(*sorted(zip(doc_scores, range(passage_count)),reverse=True)))
+            # retrieve_idx = sorted(retrieve_idx[:reduce_count])
+            retrieve_idx = sorted(retrieve_idx[:min(passage_count-1,5)])
+            
+            retrieve_passage = []
+            for r in retrieve_idx: retrieve_passage.extend(examples['text'][i][r])
+            examples['text'][i] = ''.join(retrieve_passage)
+            while len(examples['text'][i]) < args.max_length*2: examples['text'][i] = examples['text'][i] + '/' + examples['text'][i]
+        
         for label in ['A', 'B', 'C']: texts[label] = [p for p in examples['text']]
         def convert(c):
             if c == 'A': return 0
@@ -420,17 +492,23 @@ def main(args):
             if example_id in inverted_file: inverted_file[example_id].append(i)
             else: inverted_file[example_id] = [i]
         for i in range(len(inverted_file)):
-            passage_count = len(inverted_file[i])
-            if passage_count > 4:
-                tokenized_corpus = [tokenized_examples['A']['input_ids'][j] for j in inverted_file[i]]
-                bm25 = BM25Okapi(tokenized_corpus)
-                tokenized_query = [tokenized_option[j]['input_ids'][i] for j in ['A', 'B', 'C']]
-                tokenized_query = [t for option in tokenized_query for t in option]
-                doc_scores = bm25.get_scores(tokenized_query)
-                reduce_count = int(passage_count * 0.6)
-                _, inverted_file[i] = map(list, zip(*sorted(zip(doc_scores, inverted_file[i]),reverse=True)))
-                inverted_file[i] = inverted_file[i][:reduce_count]
+            inverted_file[i] = [inverted_file[i][0], inverted_file[i][1]]
+            # passage_count = len(inverted_file[i])
+            # print(inverted_file[i])
+            # exit()
+            # if passage_count > 4:
+            #     tokenized_corpus = [tokenized_examples['A']['input_ids'][j] for j in inverted_file[i]]
+            #     tokenized_corpus = tokenizer.batch_decode(tokenized_corpus, skip_special_tokens=True)
+            #     bm25 = BM25Okapi(tokenized_corpus)
+            #     # tokenized_query = [tokenized_option[j]['input_ids'][i] for j in ['A', 'B', 'C']]
+            #     # tokenized_query = [t for option in tokenized_query for t in option]
+
+            #     doc_scores = bm25.get_scores(query_option[i])
+            #     reduce_count = int(passage_count * 0.9)
+            #     _, inverted_file[i] = map(list, zip(*sorted(zip(doc_scores, inverted_file[i]),reverse=True)))
+            #     inverted_file[i] = inverted_file[i][:reduce_count]
         selected_passages = sorted([i for _,lst in inverted_file.items() for i in lst])
+        
         for label in ['A', 'B', 'C']:
             sample_mapping = tokenized_examples[label].pop("overflow_to_sample_mapping")
             option_len = len(tokenized_option[label]['input_ids'][0])
@@ -495,7 +573,7 @@ def main(args):
     ##########################
     train_dataset = train_dataset.map(normalize_qa)
     train_noaug_dataset = train_noaug_dataset.map(normalize_qa)
-    eval_dataset  = eval_dataset .map(normalize_qa)
+    eval_dataset  = eval_dataset.map(normalize_qa)
     ###########################
     train_dataset = train_dataset.map(
             preprocess_function,
