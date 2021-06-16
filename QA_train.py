@@ -82,7 +82,7 @@ def parse_args():
     )
     
     parser.add_argument(
-        "--train_file_aug", type=str, default='./data/qa_aug_04.json', help="A json file containing the training data."
+        "--train_file_aug", type=str, default='./data/Train_qa_ans.json', help="A json file containing the training data."
     )
     parser.add_argument(
         "--validation_file", type=str, default='./data/clean_qa.json', help="A json file containing the validation data."
@@ -128,34 +128,23 @@ def parse_args():
     parser.add_argument(
         "--per_device_train_batch_size",
         type=int,
-        default=2,
+        default=4,
         help="Batch size (per device) for the training dataloader.",
     )
     parser.add_argument(
         "--per_device_eval_batch_size",
         type=int,
-<<<<<<< Updated upstream
-        default=16,
-=======
         default=8,
->>>>>>> Stashed changes
         help="Batch size (per device) for the evaluation dataloader.",
     )
     parser.add_argument(
         "--learning_rate",
         type=float,
-<<<<<<< Updated upstream
-        default=5e-5,
-        help="Initial learning rate (after the potential warmup period) to use.",
-    )
-    parser.add_argument("--weight_decay", type=float, default=0, help="Weight decay to use.")
-=======
-        default=1e-6,
+        default=1e-5,
         help="Initial learning rate (after the potential warmup period) to use.",
     )
     parser.add_argument("--weight_decay", type=float, default=5e-2, help="Weight decay to use.")
->>>>>>> Stashed changes
-    parser.add_argument("--num_train_epochs", type=int, default=20, help="Total number of training epochs to perform.")
+    parser.add_argument("--num_train_epochs", type=int, default=7, help="Total number of training epochs to perform.")
     parser.add_argument(
         "--max_train_steps",
         type=int,
@@ -165,7 +154,7 @@ def parse_args():
     parser.add_argument(
         "--gradient_accumulation_steps",
         type=int,
-        default=4,
+        default=8,
         help="Number of updates steps to accumulate before performing a backward/update pass.",
     )
     parser.add_argument("--save_model_dir", type=str, default='./MCQ_model', help="Where to store the final model.")
@@ -299,20 +288,15 @@ def main(args):
         # print(examples['text'][0])
         for i in range(len(examples['text'])):
             examples['text'][i] = examples['text'][i].split('###')
-            for j,text in enumerate(examples['text'][i]):
-                examples['text'][i][j] = jieba.lcut_for_search(text)
-            bm25 = BM25Okapi(examples['text'][i])
+            corpus = [jieba.lcut_for_search(text) for text in examples['text'][i]]
+            bm25 = BM25Okapi(corpus)
             doc_scores = bm25.get_scores(query_option[i])
             passage_count = len(examples['text'][i]) 
-            reduce_count = int(passage_count * 0.1)
             _, retrieve_idx = map(list, zip(*sorted(zip(doc_scores, range(passage_count)),reverse=True)))
-            # retrieve_idx = sorted(retrieve_idx[:reduce_count])
             retrieve_idx = sorted(retrieve_idx[:min(passage_count-1,5)])
             
-            retrieve_passage = []
-            for r in retrieve_idx: retrieve_passage.extend(examples['text'][i][r])
-            examples['text'][i] = ''.join(retrieve_passage)
-            while len(examples['text'][i]) < args.max_length: examples['text'][i] = examples['text'][i] + '/' + examples['text'][i]
+            examples['text'][i] = ''.join([examples['text'][i][r] for r in retrieve_idx])
+            # while len(examples['text'][i]) < args.max_length: examples['text'][i] = examples['text'][i] + '/' + examples['text'][i]
 
             # print(examples['text'][i])
             # print(query_option[i])
@@ -357,10 +341,8 @@ def main(args):
         # print([len(v) for k,v in inverted_file.items()])
         # exit()
         for i in range(len(inverted_file)):
-            inverted_file[i] = [inverted_file[i][0]]
+            inverted_file[i] = inverted_file[i][:min(len(inverted_file[i]),1)]
             # passage_count = len(inverted_file[i])
-            # print(inverted_file[i])
-            # exit()
             # if passage_count > 4:
             #     tokenized_corpus = [tokenized_examples['A']['input_ids'][j] for j in inverted_file[i]]
             #     tokenized_corpus = tokenizer.batch_decode(tokenized_corpus, skip_special_tokens=True)

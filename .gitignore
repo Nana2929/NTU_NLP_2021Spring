@@ -15,6 +15,7 @@ Aicup_Text_Aug/CwnGraph/
 *.pyobj
 CTAtool/CwnGraph/
 *.csv
+*.txt
 risk_cls/Classification_train_sched.py
 test.py
 QA_train_1.py

@@ -277,8 +277,7 @@ def main(args):
         # print(examples['text'][0])
         for i in range(len(examples['text'])):
             examples['text'][i] = examples['text'][i].split('###')
-            for j,text in enumerate(examples['text'][i]):
-                examples['text'][i][j] = jieba.lcut_for_search(text)
+            corpus = [jieba.lcut_for_search(text) for text in examples['text'][i]]
             bm25 = BM25Okapi(examples['text'][i])
             doc_scores = bm25.get_scores(query_option[i])
             passage_count = len(examples['text'][i]) 
@@ -287,10 +286,8 @@ def main(args):
             # retrieve_idx = sorted(retrieve_idx[:reduce_count])
             retrieve_idx = sorted(retrieve_idx[:min(passage_count-1,5)])
             
-            retrieve_passage = []
-            for r in retrieve_idx: retrieve_passage.extend(examples['text'][i][r])
-            examples['text'][i] = ''.join(retrieve_passage)
-            while len(examples['text'][i]) < args.max_length: examples['text'][i] = examples['text'][i] + '/' + examples['text'][i]
+            examples['text'][i] = ''.join([examples['text'][i][r] for r in retrieve_idx])
+            # while len(examples['text'][i]) < args.max_length: examples['text'][i] = examples['text'][i] + '/' + examples['text'][i]
 
             # print(examples['text'][i])
             # print(query_option[i])
@@ -335,7 +332,7 @@ def main(args):
         # print([len(v) for k,v in inverted_file.items()])
         # exit()
         for i in range(len(inverted_file)):
-            inverted_file[i] = [inverted_file[i][0]]
+            inverted_file[i] = inverted_file[i][:min(len(inverted_file[i]),1)]
             # passage_count = len(inverted_file[i])
             # print(inverted_file[i])
             # exit()

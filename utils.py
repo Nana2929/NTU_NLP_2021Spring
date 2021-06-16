@@ -42,15 +42,6 @@ def normalize_qa(example, rep_speaker=False):
     '''normalize qa file w.r.t. its format'''
     # text 
     example['text'] = normalize_string(example['text'])
-<<<<<<< Updated upstream
-    example['text'] = re.sub('醫師a:', '###醫師a:', example['text'])
-    example['text'] = re.sub('醫師b:', '###醫師b:', example['text'])
-    example['text'] = re.sub('醫師:', '###醫師:', example['text'])
-    example['text'] = re.sub('個管師:', '###個管師:', example['text'])
-    if rep_speaker:
-        example['text'] = re.sub(r'醫師:|個管師:', '[S1]:', example['text'])
-        example['text'] = re.sub(r'家屬:|民眾:', '[S2]:', example['text'])
-=======
     # if rep_speaker:
     #     example['text'] = re.sub(r'醫師:|個管師:', '###[S1]:', example['text'])
     #     example['text'] = re.sub(r'家屬:|民眾:', '[S2]:', example['text'])
@@ -59,7 +50,6 @@ def normalize_qa(example, rep_speaker=False):
     example['text'] = re.sub('醫師a:', '###醫師a:', example['text'])
     example['text'] = re.sub('醫師b:', '###醫師b:', example['text'])
     example['text'] = re.sub('個管師:', '###個管師:', example['text'])
->>>>>>> Stashed changes
     
     # q stem 
     example['question']['stem'] = normalize_string(example['question']['stem'])
