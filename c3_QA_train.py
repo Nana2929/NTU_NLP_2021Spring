@@ -95,6 +95,9 @@ def parse_args():
         "--validation_file", type=str, default='./data/clean_qa.json', help="A json file containing the validation data."
     )
     parser.add_argument(
+        "--test_file", type=str, default='./data/Test_QA_labeled_50.json', help="A json file containing the validation data."
+    )
+    parser.add_argument(
         "--max_length",
         type=int,
         default=512,
@@ -112,7 +115,8 @@ def parse_args():
         "--model_name_or_path",
         type=str,
         help="Path to pretrained model or model identifier from huggingface.co/models.",
-        default='ckiplab/bert-base-chinese',
+        # default='ckiplab/bert-base-chinese',
+        default='./c3_model_6490',
     )
     parser.add_argument(
         "--max_position_embeddings",
@@ -147,10 +151,10 @@ def parse_args():
     parser.add_argument(
         "--learning_rate",
         type=float,
-        default=1e-5,
+        default=2e-5,
         help="Initial learning rate (after the potential warmup period) to use.",
     )
-    parser.add_argument("--weight_decay", type=float, default=5e-2, help="Weight decay to use.")
+    parser.add_argument("--weight_decay", type=float, default=1e-2, help="Weight decay to use.")
     parser.add_argument("--num_train_epochs", type=int, default=20, help="Total number of training epochs to perform.")
     parser.add_argument(
         "--max_train_steps",
@@ -161,7 +165,7 @@ def parse_args():
     parser.add_argument(
         "--gradient_accumulation_steps",
         type=int,
-        default=16,
+        default=8,
         help="Number of updates steps to accumulate before performing a backward/update pass.",
     )
     parser.add_argument("--save_model_dir", type=str, default='./MCQ_model', help="Where to store the final model.")
@@ -266,15 +270,20 @@ def main(args):
     data_files = {}
     data_files["train"] = args.train_file_aug
     data_files["train_eval"] = args.train_file
-    data_files["validation"] = args.validation_file
+    # data_files["validation"] = args.validation_file
+    # data_files["test"] = args.test_file
+    data_files["test"] = args.validation_file
+    data_files["validation"] = args.test_file
     data_files["c3d"] = args.c3d_train_file
     # data_files["c3m"] = args.c3m_train_file
     
     extension = args.dataset_script
     raw_datasets = load_dataset(extension, data_files=data_files)
 
-    num_train_samples = len(raw_datasets['train'])
+    # num_train_samples = len(raw_datasets['train'])
     num_eval_samples = len(raw_datasets['validation'])
+    num_train_samples = len(raw_datasets['train']) + len(raw_datasets['validation'])
+    num_eval_samples = len(raw_datasets['test'])
     if args.debug:
         for split in raw_datasets.keys():
             raw_datasets[split] = raw_datasets[split].select(range(10))
@@ -406,146 +415,20 @@ def main(args):
             tokenized_inputs["example_id"].append(examples["id"][sample_index])
             tokenized_inputs['labels'].append(answers[sample_index])
         return tokenized_inputs
-
-    def preprocess_function_c3m(examples):
-        question, option, texts = {}, {}, {}
-        for i,label in enumerate(['A', 'B', 'C']): question[label] = [q['stem'] for q in examples['question']]
-        for i,label in enumerate(['A', 'B', 'C']): option[label] = [q['choices'][i]['text'] for q in examples['question']]
-        query_question = [jieba.lcut_for_search(q['stem']) for q in examples['question']]
-        query_option = [jieba.lcut_for_search(q['choices'][0]['text']+'/'+q['choices'][1]['text']+'/'+q['choices'][2]['text']) for q in examples['question']]
-
-        for i in range(len(examples['text'])):
-            examples['text'][i] = examples['text'][i].split('.')
-            corpus = [jieba.lcut_for_search(text) for text in examples['text'][i]]
-            bm25 = BM25Okapi(corpus)
-            doc_scores = bm25.get_scores(query_option[i])
-            passage_count = len(examples['text'][i]) 
-            _, retrieve_idx = map(list, zip(*sorted(zip(doc_scores, range(passage_count)),reverse=True)))
-            retrieve_idx = sorted(retrieve_idx[:min(passage_count-1,10)])
-            
-            examples['text'][i] = '.'.join([examples['text'][i][r] for r in retrieve_idx])
-            # while len(examples['text'][i]) < args.max_length: examples['text'][i] = examples['text'][i] + '/' + examples['text'][i]
-        
-        for label in ['A', 'B', 'C']: texts[label] = [p for p in examples['text']]
-        def convert(c):
-            if c == 'A': return 0
-            elif c == 'B': return 1
-            elif c == 'C': return 2
-            else: 
-                print(f'Invalid label "{c}"')
-                exit()
-        
-        answers = list(map(convert, examples['answer']))
-        tokenized_examples, tokenized_option = {}, {}
-        for label in ['A', 'B', 'C']:
-            tokenized_examples[label] = tokenizer(
-                texts[label],
-                max_length = args.max_length,
-                truncation = True,
-                stride = args.doc_stride,
-                return_overflowing_tokens=True,
-                padding = False,
-            )
-            tokenized_option[label] = tokenizer(
-                question[label],
-                option[label],
-                stride = args.doc_stride,
-                padding = False,
-            )
-        sample_mapping = tokenized_examples['A']["overflow_to_sample_mapping"]
-        inverted_file = {}
-        for i,example_id in enumerate(sample_mapping):
-            if example_id in inverted_file: inverted_file[example_id].append(i)
-            else: inverted_file[example_id] = [i]
-        
-        # print([len(v) for k,v in inverted_file.items()])
-        # exit()
-        for i in range(len(inverted_file)):
-            inverted_file[i] = inverted_file[i][:min(len(inverted_file[i]),1)]
-
-        selected_passages = sorted([i for _,lst in inverted_file.items() for i in lst])
-        
-        
-        for label in ['A', 'B', 'C']:
-            sample_mapping = tokenized_examples[label].pop("overflow_to_sample_mapping")
-            # option_len = len(tokenized_option[label]['input_ids'][0])
-            # tokenized_option[label]['input_ids'][0][0] = 102 # 102 [SEP]
-            tokenized_option[label]['input_ids'][0].pop(0)
-            tokenized_option[label]['token_type_ids'][0].pop(0)
-            tokenized_option[label]['attention_mask'][0].pop(0)
-            option_len = len(tokenized_option[label]['input_ids'][0])
-            sample_mapping.append(-1)
-            for i,sample_id in enumerate(sample_mapping):      
-                if sample_id == sample_mapping[i+1]:
-                    tokenized_examples[label]['input_ids'][i] = tokenized_examples[label]['input_ids'][i][:-option_len]
-                    tokenized_examples[label]['input_ids'][i].extend(tokenized_option[label]['input_ids'][sample_id])
-                    tokenized_examples[label]['token_type_ids'][i] = tokenized_examples[label]['token_type_ids'][i][:-option_len+1]
-                    for _ in range(option_len-1): tokenized_examples[label]['token_type_ids'][i].append(1)
-                else:
-                    paragraph_len = len(tokenized_examples[label]['input_ids'][i])
-                    overflow_len = paragraph_len + option_len - 1 - args.max_length
-                    if overflow_len > 0:    
-                        tokenized_examples[label]['input_ids'][i] = tokenized_examples[label]['input_ids'][i][:-overflow_len-1]
-                        tokenized_examples[label]['input_ids'][i].extend(tokenized_option[label]['input_ids'][sample_id])
-                        tokenized_examples[label]['token_type_ids'][i] = tokenized_examples[label]['token_type_ids'][i][:-overflow_len]
-                        for _ in range(option_len-1): tokenized_examples[label]['token_type_ids'][i].append(1)
-                        tokenized_examples[label]['attention_mask'][i] = tokenized_examples[label]['attention_mask'][i][:-overflow_len-1]
-                        tokenized_examples[label]['attention_mask'][i].extend(tokenized_option[label]['attention_mask'][sample_id])
-                    else:
-                        tokenized_examples[label]['input_ids'][i].pop(-1)
-                        tokenized_examples[label]['input_ids'][i].extend(tokenized_option[label]['input_ids'][sample_id])
-                        for _ in range(option_len-1): tokenized_examples[label]['token_type_ids'][i].append(1)
-                        tokenized_examples[label]['attention_mask'][i].pop(-1)
-                        tokenized_examples[label]['attention_mask'][i].extend(tokenized_option[label]['attention_mask'][sample_id])
-                    if sample_mapping[i+1] == -1:
-                        break
-                    else:
-                        # option_len = len(tokenized_option[label]['input_ids'][sample_id+1])
-                        # tokenized_option[label]['input_ids'][sample_id+1][0] = 102
-                        tokenized_option[label]['input_ids'][sample_id+1].pop(0)
-                        tokenized_option[label]['token_type_ids'][sample_id+1].pop(0)
-                        tokenized_option[label]['attention_mask'][sample_id+1].pop(0)
-                        option_len = len(tokenized_option[label]['input_ids'][sample_id+1])
-            sample_mapping.pop(-1)
-                
-        keys = tokenized_examples['A'].keys()
-        tokenized_inputs = {k:[[tokenized_examples['A'][k][i],
-                                tokenized_examples['B'][k][i],
-                                tokenized_examples['C'][k][i]] for i in selected_passages] for k in keys}
-
-        # for k in keys:    
-        #     tokenized_inputs[k] = [tokenized_inputs[k][p] for p in ]
-        tokenized_inputs["labels"] = [] # 0 or 1 
-        tokenized_inputs["example_id"] = []
-        for i in selected_passages:
-            # Grab the sequence corresponding to that example (to know what is the context and what is the question).
-            # One example can give several spans, this is the index of the example containing this span of text.
-            sample_index = sample_mapping[i]
-            tokenized_inputs["example_id"].append(examples["id"][sample_index])
-            tokenized_inputs['labels'].append(answers[sample_index])
-        return tokenized_inputs
-
  
 
     column_names=raw_datasets["train"].column_names
-    c3d_train_dataset, train_dataset, train_noaug_dataset, eval_dataset = raw_datasets['c3d'], raw_datasets['train'], raw_datasets['train_eval'], raw_datasets['validation']
-    # c3d_train_dataset, c3m_train_dataset, train_dataset, train_noaug_dataset, eval_dataset = raw_datasets['c3d'], raw_datasets['c3m'], raw_datasets['train'], raw_datasets['train_eval'], raw_datasets['validation']
+    c3d_train_dataset, train_dataset, train_noaug_dataset, eval_dataset, test_dataset = raw_datasets['c3d'], raw_datasets['train'], raw_datasets['train_eval'], raw_datasets['validation'], raw_datasets['test']
     
     ##########################
-    c3d_train_dataset = c3d_train_dataset.map(normalize_qa_c3d)
-    # c3m_train_dataset = c3m_train_dataset.map(normalize_qa_c3m)
+    # c3d_train_dataset = c3d_train_dataset.map(normalize_qa_c3d)
     train_dataset = train_dataset.map(normalize_qa)
     train_noaug_dataset = train_noaug_dataset.map(normalize_qa)
     eval_dataset  = eval_dataset.map(normalize_qa)
+    test_dataset  = test_dataset.map(normalize_qa)
     ###########################
-    c3d_train_dataset = c3d_train_dataset.map(
-            preprocess_function,
-            batched=True,
-            num_proc=1,
-            remove_columns=column_names,
-        )
-    # c3m_train_dataset = c3m_train_dataset.map(
-    #         preprocess_function_c3m,
+    # c3d_train_dataset = c3d_train_dataset.map(
+    #         preprocess_function,
     #         batched=True,
     #         num_proc=1,
     #         remove_columns=column_names,
@@ -568,26 +451,34 @@ def main(args):
             num_proc=1,
             remove_columns=column_names,
         )
+    test_dataset = test_dataset.map(
+            preprocess_function,
+            batched=True,
+            num_proc=1,
+            remove_columns=column_names,
+        )
     # print('done')
     # exit()
     # Log a few random samples from the training set:
     # for index in random.sample(range(len(train_dataset)), 3):
     #     logger.info(f"Sample {index} of the training set: {train_dataset[index]}.")
-    c3d_train_dataset,c3d_eval_dataset = random_split(c3d_train_dataset,[int(len(c3d_train_dataset)*0.85),len(c3d_train_dataset)-int(len(c3d_train_dataset)*0.85)])
-    num_c3d_eval_samples = len(c3d_eval_dataset)
+    # c3d_train_dataset,c3d_eval_dataset = random_split(c3d_train_dataset,[int(len(c3d_train_dataset)*0.85),len(c3d_train_dataset)-int(len(c3d_train_dataset)*0.85)])
+    # num_c3d_eval_samples = len(c3d_eval_dataset)
     data_collator = DataCollatorForMultipleChoice(tokenizer, pad_to_multiple_of=None)
     # train_dataset = ConcatDataset([train_dataset, c3d_train_dataset])
-    train_dataset = c3d_train_dataset
+    train_dataset = ConcatDataset([train_dataset, eval_dataset])
+    # train_dataset = c3d_train_dataset
     train_dataloader = DataLoader(
         train_dataset, shuffle=True, collate_fn=data_collator, batch_size=args.per_device_train_batch_size
     )
     train_noaug_dataloader = DataLoader(train_noaug_dataset, collate_fn=data_collator, batch_size=args.per_device_eval_batch_size)
-    eval_dataloader = DataLoader(eval_dataset, collate_fn=data_collator, batch_size=args.per_device_eval_batch_size)
-    c3d_eval_dataloader = DataLoader(c3d_eval_dataset, collate_fn=data_collator, batch_size=args.per_device_eval_batch_size)
+    # eval_dataloader = DataLoader(eval_dataset, collate_fn=data_collator, batch_size=args.per_device_eval_batch_size)
+    # c3d_eval_dataloader = DataLoader(c3d_eval_dataset, collate_fn=data_collator, batch_size=args.per_device_eval_batch_size)
+    eval_dataloader = DataLoader(test_dataset, collate_fn=data_collator, batch_size=args.per_device_eval_batch_size)
     num_train_batch = len(train_dataloader)
     num_train_noaug_batch = len(train_noaug_dataloader)
     num_eval_batch = len(eval_dataloader)
-    num_c3d_eval_batch = len(c3d_eval_dataloader)
+    # num_c3d_eval_batch = len(c3d_eval_dataloader)
     # Optimizer
     # Split weights in two groups, one with weight decay and the other not.
     no_decay = ["bias", "LayerNorm.weight"]
@@ -604,14 +495,21 @@ def main(args):
     optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate)
 
     model.cuda()
-
+    
     # Scheduler and math around the number of training steps.
     num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
+    num_train_steps = num_update_steps_per_epoch*20
     if args.max_train_steps is None:
         args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
     else:
         args.num_train_epochs = math.ceil(args.max_train_steps / num_update_steps_per_epoch)
 
+    lr_scheduler = get_scheduler(
+        name='cosine',
+        optimizer=optimizer,
+        num_warmup_steps=num_train_steps//6,
+        num_training_steps=num_train_steps,
+    )
 
     # Train!
     logger.info("***** Running training *****")
@@ -639,6 +537,7 @@ def main(args):
             train_loss += loss.item()
             if (step+1) % args.gradient_accumulation_steps == 0 or (step+1) == len(train_dataloader):
                 optimizer.step()
+                lr_scheduler.step()
                 optimizer.zero_grad()
             print(f'training [{step:3d}/{num_train_batch}] loss: {loss.item():.5f}',end='\r')
         train_loss /= num_train_batch
@@ -685,29 +584,29 @@ def main(args):
         eval_acc = (np.sum(np.argmax(y_preds, axis=1) == y_trues) - 1)/num_eval_samples
         eval_loss /= num_eval_batch
 
-        y_preds = []
-        y_trues = []
-        c3_eval_loss = 0
-        for step, batch in enumerate(c3d_eval_dataloader):
-            with torch.no_grad():
-                example_ids = batch.pop('example_id').tolist()
-                for i in batch.keys():
-                    batch[i] = batch[i].cuda()
-                outputs = model(**batch)
-                loss = outputs.loss
-                c3_eval_loss += loss.item()
-                y_preds.extend(list(np.argmax(outputs.logits.cpu().data.numpy(), axis=1)))
-                y_trues.extend(batch['labels'].cpu().data.tolist())
-            print(f'eval on eval [{step:3d}/{num_eval_batch}]',end='\r')
-        # print(y_preds)
-        # print(y_trues)
-        c3_eval_acc = (np.sum(np.array(y_preds) == np.array(y_trues)))/num_c3d_eval_samples
-        c3_eval_loss /= num_c3d_eval_batch
+        # y_preds = []
+        # y_trues = []
+        # c3_eval_loss = 0
+        # for step, batch in enumerate(c3d_eval_dataloader):
+        #     with torch.no_grad():
+        #         example_ids = batch.pop('example_id').tolist()
+        #         for i in batch.keys():
+        #             batch[i] = batch[i].cuda()
+        #         outputs = model(**batch)
+        #         loss = outputs.loss
+        #         c3_eval_loss += loss.item()
+        #         y_preds.extend(list(np.argmax(outputs.logits.cpu().data.numpy(), axis=1)))
+        #         y_trues.extend(batch['labels'].cpu().data.tolist())
+        #     print(f'eval on eval [{step:3d}/{num_eval_batch}]',end='\r')
+        # # print(y_preds)
+        # # print(y_trues)
+        # c3_eval_acc = (np.sum(np.array(y_preds) == np.array(y_trues)))/num_c3d_eval_samples
+        # c3_eval_loss /= num_c3d_eval_batch
 
         print(f'epoch [{epoch+1:02d}/{args.num_train_epochs:02d}]: {time.time()-epoch_start_time:.2f} sec(s)')
         print(f'train loss: {train_loss:.4f}, train acc: {train_acc:.4f}')
-        print(f'  eval loss: {eval_loss:.4f},   eval acc: {eval_acc:.4f}')
-        print(f'c3eval loss: {c3_eval_loss:.4f}, c3eval acc: {c3_eval_acc:.4f}')
+        print(f'eval loss: {eval_loss:.4f},  eval acc: {eval_acc:.4f}')
+        # print(f'c3eval loss: {c3_eval_loss:.4f}, c3eval acc: {c3_eval_acc:.4f}')
         model.save_pretrained(args.save_model_dir)
    
 if __name__ == "__main__":
