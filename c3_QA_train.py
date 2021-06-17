@@ -26,12 +26,13 @@ from typing import Optional, Union
 
 from numpy.lib.function_base import select
 from rank_bm25 import BM25Okapi
-from utils import normalize_qa
+from utils import normalize_qa, normalize_qa_c3d, normalize_qa_c3m
 import datasets
 import torch
 import torch.nn as nn
 from datasets import load_dataset, load_metric
 from torch.utils.data.dataloader import DataLoader
+from torch.utils.data import ConcatDataset, random_split
 import time
 import transformers
 from transformers import (
@@ -79,6 +80,12 @@ def parse_args():
     )
     parser.add_argument(
         "--train_file", type=str, default='./data/Train_qa_ans.json', help="A json file containing the training data."
+    )
+    parser.add_argument(
+        "--c3d_train_file", type=str, default='./data/c3_d_aicup.json', help="A json file containing the training data."
+    )
+    parser.add_argument(
+        "--c3m_train_file", type=str, default='./data/c3_m_aicup.json', help="A json file containing the training data."
     )
     
     parser.add_argument(
@@ -128,7 +135,7 @@ def parse_args():
     parser.add_argument(
         "--per_device_train_batch_size",
         type=int,
-        default=4,
+        default=2,
         help="Batch size (per device) for the training dataloader.",
     )
     parser.add_argument(
@@ -144,7 +151,7 @@ def parse_args():
         help="Initial learning rate (after the potential warmup period) to use.",
     )
     parser.add_argument("--weight_decay", type=float, default=5e-2, help="Weight decay to use.")
-    parser.add_argument("--num_train_epochs", type=int, default=7, help="Total number of training epochs to perform.")
+    parser.add_argument("--num_train_epochs", type=int, default=20, help="Total number of training epochs to perform.")
     parser.add_argument(
         "--max_train_steps",
         type=int,
@@ -154,11 +161,11 @@ def parse_args():
     parser.add_argument(
         "--gradient_accumulation_steps",
         type=int,
-        default=8,
+        default=16,
         help="Number of updates steps to accumulate before performing a backward/update pass.",
     )
-    parser.add_argument("--save_model_dir", type=str, default='./MCQ_model_4948', help="Where to store the final model.")
-    parser.add_argument("--seed", type=int, default=7, help="A seed for reproducible training.")
+    parser.add_argument("--save_model_dir", type=str, default='./MCQ_model', help="Where to store the final model.")
+    parser.add_argument("--seed", type=int, default=1126, help="A seed for reproducible training.")
     parser.add_argument(
         "--model_type",
         type=str,
@@ -260,8 +267,12 @@ def main(args):
     data_files["train"] = args.train_file_aug
     data_files["train_eval"] = args.train_file
     data_files["validation"] = args.validation_file
+    data_files["c3d"] = args.c3d_train_file
+    # data_files["c3m"] = args.c3m_train_file
+    
     extension = args.dataset_script
     raw_datasets = load_dataset(extension, data_files=data_files)
+
     num_train_samples = len(raw_datasets['train'])
     num_eval_samples = len(raw_datasets['validation'])
     if args.debug:
@@ -283,9 +294,7 @@ def main(args):
         for i,label in enumerate(['A', 'B', 'C']): option[label] = [q['choices'][i]['text'] for q in examples['question']]
         query_question = [jieba.lcut_for_search(q['stem']) for q in examples['question']]
         query_option = [jieba.lcut_for_search(q['choices'][0]['text']+'/'+q['choices'][1]['text']+'/'+q['choices'][2]['text']) for q in examples['question']]
-        # print(query_question)
-        # print(query_option)
-        # print(examples['text'][0])
+
         for i in range(len(examples['text'])):
             examples['text'][i] = examples['text'][i].split('###')
             corpus = [jieba.lcut_for_search(text) for text in examples['text'][i]]
@@ -297,11 +306,8 @@ def main(args):
             
             examples['text'][i] = ''.join([examples['text'][i][r] for r in retrieve_idx])
             # while len(examples['text'][i]) < args.max_length: examples['text'][i] = examples['text'][i] + '/' + examples['text'][i]
-
-            # print(examples['text'][i])
-            # print(query_option[i])
-            # print(len(examples['text'][i]))
-        
+        # print(examples['text'])
+        # exit()
         for label in ['A', 'B', 'C']: texts[label] = [p for p in examples['text']]
         def convert(c):
             if c == 'A': return 0
@@ -310,11 +316,7 @@ def main(args):
             else: 
                 print(f'Invalid label "{c}"')
                 exit()
-        # x = 64
-        # print(examples['text'][x])
-        # print(examples['question'][x]['stem'])
-        # print(query_option[x])
-        # exit()
+        
         answers = list(map(convert, examples['answer']))
         tokenized_examples, tokenized_option = {}, {}
         for label in ['A', 'B', 'C']:
@@ -342,18 +344,7 @@ def main(args):
         # exit()
         for i in range(len(inverted_file)):
             inverted_file[i] = inverted_file[i][:min(len(inverted_file[i]),1)]
-            # passage_count = len(inverted_file[i])
-            # if passage_count > 4:
-            #     tokenized_corpus = [tokenized_examples['A']['input_ids'][j] for j in inverted_file[i]]
-            #     tokenized_corpus = tokenizer.batch_decode(tokenized_corpus, skip_special_tokens=True)
-            #     bm25 = BM25Okapi(tokenized_corpus)
-            #     # tokenized_query = [tokenized_option[j]['input_ids'][i] for j in ['A', 'B', 'C']]
-            #     # tokenized_query = [t for option in tokenized_query for t in option]
 
-            #     doc_scores = bm25.get_scores(query_option[i])
-            #     reduce_count = int(passage_count * 0.9)
-            #     _, inverted_file[i] = map(list, zip(*sorted(zip(doc_scores, inverted_file[i]),reverse=True)))
-            #     inverted_file[i] = inverted_file[i][:reduce_count]
         selected_passages = sorted([i for _,lst in inverted_file.items() for i in lst])
         
         
@@ -416,31 +407,24 @@ def main(args):
             tokenized_inputs['labels'].append(answers[sample_index])
         return tokenized_inputs
 
-    def preprocess_augument_function(examples):
+    def preprocess_function_c3m(examples):
         question, option, texts = {}, {}, {}
         for i,label in enumerate(['A', 'B', 'C']): question[label] = [q['stem'] for q in examples['question']]
         for i,label in enumerate(['A', 'B', 'C']): option[label] = [q['choices'][i]['text'] for q in examples['question']]
         query_question = [jieba.lcut_for_search(q['stem']) for q in examples['question']]
         query_option = [jieba.lcut_for_search(q['choices'][0]['text']+'/'+q['choices'][1]['text']+'/'+q['choices'][2]['text']) for q in examples['question']]
-        # print(query_question)
-        # print(query_option)
-        # print(examples['text'][0])
+
         for i in range(len(examples['text'])):
-            examples['text'][i] = examples['text'][i].split('###')
-            for j,text in enumerate(examples['text'][i]):
-                examples['text'][i][j] = jieba.lcut_for_search(text)
-            bm25 = BM25Okapi(examples['text'][i])
+            examples['text'][i] = examples['text'][i].split('.')
+            corpus = [jieba.lcut_for_search(text) for text in examples['text'][i]]
+            bm25 = BM25Okapi(corpus)
             doc_scores = bm25.get_scores(query_option[i])
             passage_count = len(examples['text'][i]) 
-            reduce_count = int(passage_count * 0.1)
             _, retrieve_idx = map(list, zip(*sorted(zip(doc_scores, range(passage_count)),reverse=True)))
-            # retrieve_idx = sorted(retrieve_idx[:reduce_count])
-            retrieve_idx = sorted(retrieve_idx[:min(passage_count-1,5)])
+            retrieve_idx = sorted(retrieve_idx[:min(passage_count-1,10)])
             
-            retrieve_passage = []
-            for r in retrieve_idx: retrieve_passage.extend(examples['text'][i][r])
-            examples['text'][i] = ''.join(retrieve_passage)
-            while len(examples['text'][i]) < args.max_length*2: examples['text'][i] = examples['text'][i] + '/' + examples['text'][i]
+            examples['text'][i] = '.'.join([examples['text'][i][r] for r in retrieve_idx])
+            # while len(examples['text'][i]) < args.max_length: examples['text'][i] = examples['text'][i] + '/' + examples['text'][i]
         
         for label in ['A', 'B', 'C']: texts[label] = [p for p in examples['text']]
         def convert(c):
@@ -450,22 +434,22 @@ def main(args):
             else: 
                 print(f'Invalid label "{c}"')
                 exit()
-
+        
         answers = list(map(convert, examples['answer']))
         tokenized_examples, tokenized_option = {}, {}
         for label in ['A', 'B', 'C']:
             tokenized_examples[label] = tokenizer(
                 texts[label],
-                max_length=args.max_length,
-                truncation=True,
-                stride=args.doc_stride,
+                max_length = args.max_length,
+                truncation = True,
+                stride = args.doc_stride,
                 return_overflowing_tokens=True,
                 padding = False,
             )
             tokenized_option[label] = tokenizer(
+                question[label],
                 option[label],
-                stride=args.doc_stride,
-                return_overflowing_tokens=True,
+                stride = args.doc_stride,
                 padding = False,
             )
         sample_mapping = tokenized_examples['A']["overflow_to_sample_mapping"]
@@ -473,30 +457,25 @@ def main(args):
         for i,example_id in enumerate(sample_mapping):
             if example_id in inverted_file: inverted_file[example_id].append(i)
             else: inverted_file[example_id] = [i]
+        
+        # print([len(v) for k,v in inverted_file.items()])
+        # exit()
         for i in range(len(inverted_file)):
-            inverted_file[i] = [inverted_file[i][0], inverted_file[i][1]]
-            # passage_count = len(inverted_file[i])
-            # print(inverted_file[i])
-            # exit()
-            # if passage_count > 4:
-            #     tokenized_corpus = [tokenized_examples['A']['input_ids'][j] for j in inverted_file[i]]
-            #     tokenized_corpus = tokenizer.batch_decode(tokenized_corpus, skip_special_tokens=True)
-            #     bm25 = BM25Okapi(tokenized_corpus)
-            #     # tokenized_query = [tokenized_option[j]['input_ids'][i] for j in ['A', 'B', 'C']]
-            #     # tokenized_query = [t for option in tokenized_query for t in option]
+            inverted_file[i] = inverted_file[i][:min(len(inverted_file[i]),1)]
 
-            #     doc_scores = bm25.get_scores(query_option[i])
-            #     reduce_count = int(passage_count * 0.9)
-            #     _, inverted_file[i] = map(list, zip(*sorted(zip(doc_scores, inverted_file[i]),reverse=True)))
-            #     inverted_file[i] = inverted_file[i][:reduce_count]
         selected_passages = sorted([i for _,lst in inverted_file.items() for i in lst])
+        
         
         for label in ['A', 'B', 'C']:
             sample_mapping = tokenized_examples[label].pop("overflow_to_sample_mapping")
+            # option_len = len(tokenized_option[label]['input_ids'][0])
+            # tokenized_option[label]['input_ids'][0][0] = 102 # 102 [SEP]
+            tokenized_option[label]['input_ids'][0].pop(0)
+            tokenized_option[label]['token_type_ids'][0].pop(0)
+            tokenized_option[label]['attention_mask'][0].pop(0)
             option_len = len(tokenized_option[label]['input_ids'][0])
-            tokenized_option[label]['input_ids'][0][0] = 102 # 102 [SEP]
             sample_mapping.append(-1)
-            for i,sample_id in enumerate(sample_mapping):
+            for i,sample_id in enumerate(sample_mapping):      
                 if sample_id == sample_mapping[i+1]:
                     tokenized_examples[label]['input_ids'][i] = tokenized_examples[label]['input_ids'][i][:-option_len]
                     tokenized_examples[label]['input_ids'][i].extend(tokenized_option[label]['input_ids'][sample_id])
@@ -521,13 +500,21 @@ def main(args):
                     if sample_mapping[i+1] == -1:
                         break
                     else:
+                        # option_len = len(tokenized_option[label]['input_ids'][sample_id+1])
+                        # tokenized_option[label]['input_ids'][sample_id+1][0] = 102
+                        tokenized_option[label]['input_ids'][sample_id+1].pop(0)
+                        tokenized_option[label]['token_type_ids'][sample_id+1].pop(0)
+                        tokenized_option[label]['attention_mask'][sample_id+1].pop(0)
                         option_len = len(tokenized_option[label]['input_ids'][sample_id+1])
-                        tokenized_option[label]['input_ids'][sample_id+1][0] = 102
             sample_mapping.pop(-1)
+                
         keys = tokenized_examples['A'].keys()
         tokenized_inputs = {k:[[tokenized_examples['A'][k][i],
                                 tokenized_examples['B'][k][i],
                                 tokenized_examples['C'][k][i]] for i in selected_passages] for k in keys}
+
+        # for k in keys:    
+        #     tokenized_inputs[k] = [tokenized_inputs[k][p] for p in ]
         tokenized_inputs["labels"] = [] # 0 or 1 
         tokenized_inputs["example_id"] = []
         for i in selected_passages:
@@ -536,27 +523,33 @@ def main(args):
             sample_index = sample_mapping[i]
             tokenized_inputs["example_id"].append(examples["id"][sample_index])
             tokenized_inputs['labels'].append(answers[sample_index])
-        
-
-        for _ in range(2):
-            for i in range(len(inverted_file)):
-                a,b,c = np.random.choice(inverted_file[i],3)
-                for k in keys:
-                    tokenized_inputs[k].append([tokenized_examples['A'][k][a],
-                                                tokenized_examples['B'][k][b],
-                                                tokenized_examples['C'][k][c]])
-                tokenized_inputs['labels'].append(answers[i])
-                tokenized_inputs["example_id"].append(examples["id"][i])
-        
         return tokenized_inputs
 
+ 
+
     column_names=raw_datasets["train"].column_names
-    train_dataset, train_noaug_dataset, eval_dataset = raw_datasets['train'], raw_datasets['train_eval'], raw_datasets['validation']
+    c3d_train_dataset, train_dataset, train_noaug_dataset, eval_dataset = raw_datasets['c3d'], raw_datasets['train'], raw_datasets['train_eval'], raw_datasets['validation']
+    # c3d_train_dataset, c3m_train_dataset, train_dataset, train_noaug_dataset, eval_dataset = raw_datasets['c3d'], raw_datasets['c3m'], raw_datasets['train'], raw_datasets['train_eval'], raw_datasets['validation']
+    
     ##########################
+    c3d_train_dataset = c3d_train_dataset.map(normalize_qa_c3d)
+    # c3m_train_dataset = c3m_train_dataset.map(normalize_qa_c3m)
     train_dataset = train_dataset.map(normalize_qa)
     train_noaug_dataset = train_noaug_dataset.map(normalize_qa)
     eval_dataset  = eval_dataset.map(normalize_qa)
     ###########################
+    c3d_train_dataset = c3d_train_dataset.map(
+            preprocess_function,
+            batched=True,
+            num_proc=1,
+            remove_columns=column_names,
+        )
+    # c3m_train_dataset = c3m_train_dataset.map(
+    #         preprocess_function_c3m,
+    #         batched=True,
+    #         num_proc=1,
+    #         remove_columns=column_names,
+    #     )
     train_dataset = train_dataset.map(
             preprocess_function,
             batched=True,
@@ -580,17 +573,21 @@ def main(args):
     # Log a few random samples from the training set:
     # for index in random.sample(range(len(train_dataset)), 3):
     #     logger.info(f"Sample {index} of the training set: {train_dataset[index]}.")
-
+    c3d_train_dataset,c3d_eval_dataset = random_split(c3d_train_dataset,[int(len(c3d_train_dataset)*0.85),len(c3d_train_dataset)-int(len(c3d_train_dataset)*0.85)])
+    num_c3d_eval_samples = len(c3d_eval_dataset)
     data_collator = DataCollatorForMultipleChoice(tokenizer, pad_to_multiple_of=None)
-
+    # train_dataset = ConcatDataset([train_dataset, c3d_train_dataset])
+    train_dataset = c3d_train_dataset
     train_dataloader = DataLoader(
         train_dataset, shuffle=True, collate_fn=data_collator, batch_size=args.per_device_train_batch_size
     )
     train_noaug_dataloader = DataLoader(train_noaug_dataset, collate_fn=data_collator, batch_size=args.per_device_eval_batch_size)
     eval_dataloader = DataLoader(eval_dataset, collate_fn=data_collator, batch_size=args.per_device_eval_batch_size)
+    c3d_eval_dataloader = DataLoader(c3d_eval_dataset, collate_fn=data_collator, batch_size=args.per_device_eval_batch_size)
     num_train_batch = len(train_dataloader)
     num_train_noaug_batch = len(train_noaug_dataloader)
     num_eval_batch = len(eval_dataloader)
+    num_c3d_eval_batch = len(c3d_eval_dataloader)
     # Optimizer
     # Split weights in two groups, one with weight decay and the other not.
     no_decay = ["bias", "LayerNorm.weight"]
@@ -617,16 +614,15 @@ def main(args):
 
 
     # Train!
-    total_batch_size = args.per_device_train_batch_size * args.gradient_accumulation_steps
-
     logger.info("***** Running training *****")
-    logger.info(f"  Num examples = {len(train_dataset)}")
+    logger.info(f"  Seed = {args.seed}")
     logger.info(f"  Num Epochs = {args.num_train_epochs}")
-    logger.info(f"  Instantaneous batch size per device = {args.per_device_train_batch_size}")
-    logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
+    logger.info(f"  Batch Size = {args.per_device_train_batch_size}")
     logger.info(f"  Gradient Accumulation steps = {args.gradient_accumulation_steps}")
-    logger.info(f"  Total optimization steps = {args.max_train_steps}")
-    # Only show the progress bar once on each machine.
+    logger.info(f"  Learning Rate = {args.learning_rate}")
+    logger.info(f"  Weight Decay = {args.weight_decay}")
+    logger.info(f"  Model = {args.save_model_dir}")
+
     softmax = nn.Softmax(dim=1)
     for epoch in range(args.num_train_epochs):
         epoch_start_time = time.time()
@@ -689,9 +685,29 @@ def main(args):
         eval_acc = (np.sum(np.argmax(y_preds, axis=1) == y_trues) - 1)/num_eval_samples
         eval_loss /= num_eval_batch
 
+        y_preds = []
+        y_trues = []
+        c3_eval_loss = 0
+        for step, batch in enumerate(c3d_eval_dataloader):
+            with torch.no_grad():
+                example_ids = batch.pop('example_id').tolist()
+                for i in batch.keys():
+                    batch[i] = batch[i].cuda()
+                outputs = model(**batch)
+                loss = outputs.loss
+                c3_eval_loss += loss.item()
+                y_preds.extend(list(np.argmax(outputs.logits.cpu().data.numpy(), axis=1)))
+                y_trues.extend(batch['labels'].cpu().data.tolist())
+            print(f'eval on eval [{step:3d}/{num_eval_batch}]',end='\r')
+        # print(y_preds)
+        # print(y_trues)
+        c3_eval_acc = (np.sum(np.array(y_preds) == np.array(y_trues)))/num_c3d_eval_samples
+        c3_eval_loss /= num_c3d_eval_batch
+
         print(f'epoch [{epoch+1:02d}/{args.num_train_epochs:02d}]: {time.time()-epoch_start_time:.2f} sec(s)')
         print(f'train loss: {train_loss:.4f}, train acc: {train_acc:.4f}')
-        print(f' eval loss: {eval_loss:.4f},  eval acc: {eval_acc:.4f}')
+        print(f'  eval loss: {eval_loss:.4f},   eval acc: {eval_acc:.4f}')
+        print(f'c3eval loss: {c3_eval_loss:.4f}, c3eval acc: {c3_eval_acc:.4f}')
         model.save_pretrained(args.save_model_dir)
    
 if __name__ == "__main__":

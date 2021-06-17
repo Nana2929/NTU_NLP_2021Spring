@@ -96,7 +96,7 @@ def parse_args():
         "--model_name_or_path",
         type=str,
         help="Path to pretrained model or model identifier from huggingface.co/models.",
-        default='./MCQ_model',
+        default='./MCQ_model_4948',
     )
     parser.add_argument(
         "--tokenizer_name",

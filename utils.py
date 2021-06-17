@@ -111,22 +111,73 @@ def normalize_qa_test(example, rep_speaker=False):
     #     example['answer'] = 'C' #菜花
         
     return example 
-# !pip install fasttext
-# import fasttext.util
-# fasttext.util.download_model('zh', if_exists='ignore')
-# ft = fasttext.load_model('cc.zh.300.bin')
-# def get_similarity(passage, qastring):
-#     '''Use fastText to get similarity
-#         input: two strings'''
-#     passageemb= ft.get_sentence_vector(passage) # 300-dim
-#     qaemb = ft.get_sentence_vector(qastring)
-#     return cosine_similarity([passageemb], [qaemb])[0][0]
 
-# df =pd.read_csv('risk_cls/Train_risk_classification_ans.csv')
-# data = df.to_dict(orient='records')
-# print(*data)
-# if __name__ == '__main__':
-#     main()
-    # s = "ＡＢＣＤ。？"
-    # a = normalize_text(s)
-    # print(a)
+def normalize_qa_c3d(example, rep_speaker=False):
+    '''normalize qa file w.r.t. its format'''
+    # text 
+    example['text'] = normalize_string(example['text'])
+    # if rep_speaker:
+    #     example['text'] = re.sub(r'醫師:|個管師:', '###[S1]:', example['text'])
+    #     example['text'] = re.sub(r'家屬:|民眾:', '[S2]:', example['text'])
+    
+    example['text'] = re.sub('男：', '###男：', example['text'])
+    example['text'] = re.sub('男:', '###男:', example['text'])
+    
+    # q stem 
+    example['question']['stem'] = normalize_string(example['question']['stem'])
+    if rep_speaker:
+        example['question']['stem']= re.sub(r'醫師|個管師', '[S1]', example['question']['stem'])
+        example['question']['stem']= re.sub(r'家屬|民眾', '[S2]', example['question']['stem'])
+    # q texts
+    proced = []
+    for i, choice in enumerate(example['question']['choices']):
+        choice['text'] = normalize_string(choice['text'])
+        if rep_speaker:
+            choice['text']= re.sub(r'醫師|個管師', '[S1]', choice['text'])
+            choice['text']= re.sub(r'家屬|民眾', '[S2]', choice['text'])
+        choice['label'] = choice['label'].strip()
+        choice['label'] = normalize_string(choice['label'], to_lower = False)
+        proced.append(choice)
+        assert choice['label'] in ['A', 'B', 'C']
+    assert len(proced) == 3
+    example['question']['choices'] = proced
+    example['answer'] = example['answer'].strip()
+    example['answer'] = normalize_string(example['answer'], to_lower = False)
+    # if example['answer'] not in ['A', 'B', 'C']:
+    #     example['answer'] = 'C' #菜花
+        
+    return example 
+
+
+def normalize_qa_c3m(example, rep_speaker=False):
+    '''normalize qa file w.r.t. its format'''
+    # text 
+    example['text'] = normalize_string(example['text'])
+    # if rep_speaker:
+    #     example['text'] = re.sub(r'醫師:|個管師:', '###[S1]:', example['text'])
+    #     example['text'] = re.sub(r'家屬:|民眾:', '[S2]:', example['text'])
+    
+    # q stem 
+    example['question']['stem'] = normalize_string(example['question']['stem'])
+    if rep_speaker:
+        example['question']['stem']= re.sub(r'醫師|個管師', '[S1]', example['question']['stem'])
+        example['question']['stem']= re.sub(r'家屬|民眾', '[S2]', example['question']['stem'])
+    # q texts
+    proced = []
+    for i, choice in enumerate(example['question']['choices']):
+        choice['text'] = normalize_string(choice['text'])
+        if rep_speaker:
+            choice['text']= re.sub(r'醫師|個管師', '[S1]', choice['text'])
+            choice['text']= re.sub(r'家屬|民眾', '[S2]', choice['text'])
+        choice['label'] = choice['label'].strip()
+        choice['label'] = normalize_string(choice['label'], to_lower = False)
+        proced.append(choice)
+        assert choice['label'] in ['A', 'B', 'C']
+    assert len(proced) == 3
+    example['question']['choices'] = proced
+    example['answer'] = example['answer'].strip()
+    example['answer'] = normalize_string(example['answer'], to_lower = False)
+    # if example['answer'] not in ['A', 'B', 'C']:
+    #     example['answer'] = 'C' #菜花
+        
+    return example 
