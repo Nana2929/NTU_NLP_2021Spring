@@ -4,6 +4,7 @@ __pycache__/
 # Datas
 data/
 *model*/
+risk_data/
 
 
 # Files
@@ -19,4 +20,3 @@ CTAtool/CwnGraph/
 risk_cls/Classification_train_sched.py
 test.py
 QA_train_1.py
-utils.py
