@@ -126,7 +126,7 @@ def gen_eda(train_orig, output_file, alpha_sr, alpha_ri, alpha_rs, alpha_rd, num
                 # 個管師: 民眾: 醫師: 家屬:
                 prefix = ''
                 # print(sent[0])
-                if sent[0] in ['個管師：','民眾：','醫師：','家屬：']:
+                if sent[0] in ['個管師：','民眾：','醫師：','家屬：', '醫師A：','醫師B：']:
                     prefix = sent[0]
                     sent = sent[1:]
                 # print(sent)
@@ -182,7 +182,7 @@ def gen_eda(train_orig, output_file, alpha_sr, alpha_ri, alpha_rs, alpha_rd, num
             
             for sent in s_par:
                 prefix = ''
-                if sent[0] in ['個管師：','民眾：','醫師：','家屬：']:
+                if sent[0] in ['個管師：','民眾：','醫師：','家屬：', '醫師A：','醫師B：']:
                     prefix = sent[0]
                     sent = sent[1:]
                 aug_sents = functions.eda(sent, alpha_sr=alpha_sr, alpha_ri=alpha_ri, alpha_rs=alpha_rs, p_rd=alpha_rd, num_aug = num_aug, cwn=cwn)
@@ -231,7 +231,7 @@ if __name__ == "__main__":
     cache.init()   
     if args.num_aug: 
         num_aug = args.num_aug 
-    else:
+    else:en
         num_aug = 2 
     gen_eda(args.input, output, alpha_sr=alpha_sr, alpha_ri=alpha_ri, alpha_rs=alpha_rs, alpha_rd=alpha_rd, num_aug = num_aug)
     if args.save_synonyms == 1: cache.save_synonym_dict()

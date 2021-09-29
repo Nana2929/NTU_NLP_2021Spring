@@ -236,6 +236,7 @@ def main(args):
             for i in batch.keys():
                 batch[i] = batch[i].to(args.device)
             outputs = model(**batch)
+            
             y_pred = torch_softmax(outputs.logits).cpu().data.numpy()
             y = batch.labels.cpu().data.numpy()
             for i, example_id in enumerate(example_ids):

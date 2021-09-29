@@ -580,7 +580,15 @@ def main(args):
                     y_preds[example_id][1] += np.log(y_pred[i][1])
                     y_preds[example_id][2] += np.log(y_pred[i][2])
                     y_trues[example_id] = y[i]
+            
             print(f'eval on eval [{step:3d}/{num_eval_batch}]',end='\r')
+        
+        
+        predictions = np.argmax(y_preds, axis=1)
+        with open('qa_comparison.txt', 'r') as f:
+            for i,(yt, yp) in enumerate(zip(y_trues, predictions)):
+                f.write(f'example id {i}: {yt}, {yp}')
+        
         eval_acc = (np.sum(np.argmax(y_preds, axis=1) == y_trues) - 1)/num_eval_samples
         eval_loss /= num_eval_batch
 
@@ -608,7 +616,7 @@ def main(args):
         print(f'eval loss: {eval_loss:.4f},  eval acc: {eval_acc:.4f}')
         # print(f'c3eval loss: {c3_eval_loss:.4f}, c3eval acc: {c3_eval_acc:.4f}')
         model.save_pretrained(args.save_model_dir)
-   
+  
 if __name__ == "__main__":
     args = parse_args()
     if args.seed is not None:
