@@ -1,8 +1,12 @@
 # NTU_NLP_2021Spring
-National Taiwan University Natural Language Process Course (CSIE5042) (2021 Spring)
+National Taiwan University Natural Language Process Final Project
 
-Task data: 醫病問答（中文）
+(CSIE5042) (2021 Spring)
 
-Task1: Classification: judge if the given patient is likely to contract a syndrome or not
+**Task data:** 醫病問答（中文）
 
-Task2: Multiple Choice
+**Dataset Source / Competition Link:** https://aidea-web.tw/topic/3665319f-cd5d-4f92-8902-00ebbd8e871d
+
+**Task1:** Classification: judge if the given patient is likely to contract a syndrome or not
+
+**Task2:** Multiple Choice QA: Reading comprehension of the doctor-patient dialogue 
