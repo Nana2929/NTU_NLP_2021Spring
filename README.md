@@ -1,5 +1,7 @@
 # NTU_NLP_2021Spring
-National Taiwan University Natural Language Process Final Project
+   - National Taiwan University Natural Language Processing 
+  
+   - Final Project
 
 (CSIE5042) (2021 Spring)
 
